@@ -1,0 +1,22 @@
+# Entorno virtual
+.venv/
+venv/
+env/
+
+# Caché de precios (regenerable con python main.py --modo scan)
+cache/
+
+# Gráficos generados (regenerables con --graficos)
+graficos/
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+
+# Señales y estado de posiciones (datos en tiempo real, no versionables)
+señales_diarias.csv
+estado_posiciones.json
+
+# macOS
+.DS_Store
