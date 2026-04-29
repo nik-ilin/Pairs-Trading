@@ -1,26 +1,36 @@
 """
 datos.py — Capa de descarga y caché de precios históricos.
 
-Responsabilidades:
-  - Descargar precios ajustados desde Yahoo Finance (2008-2026).
-  - Almacenar en caché local (Parquet) para evitar re-descargas.
-  - Proveer funciones de filtrado y limpieza usadas por todos los módulos.
+Fuentes de datos:
+  - yfinance  → histórico diario 2008-2020 (in-sample, detección de pares)
+  - Alpaca    → histórico diario 2020-hoy  (out-of-sample, backtest y señales)
+  - Alpaca    → intradiario 1Min-1Hour     (señales en tiempo real)
+
+Usar descargar_precios_combinado() como punto de entrada principal.
+Las credenciales de Alpaca van en .env (ALPACA_API_KEY, ALPACA_API_SECRET).
 """
 
 import os
 import pandas as pd
 import yfinance as yf
 import warnings
+from datetime import datetime, timedelta
 
 warnings.filterwarnings("ignore")
+
+# ── Cargar variables de entorno desde .env ───────────────────────────────────
+
+from config import (
+    ALPACA_API_KEY, ALPACA_API_SECRET, ALPACA_INTERVALO,
+    INICIO_DEFAULT, FIN_DEFAULT, MIN_OBS, CORTE_IN_SAMPLE,
+)
+
+# True si las credenciales de Alpaca están configuradas
+_ALPACA_DISPONIBLE = bool(ALPACA_API_KEY and ALPACA_API_KEY != "tu_api_key_aqui")
 
 # ── Directorio de caché ──────────────────────────────────────────────────────
 CACHE_DIR = os.path.join(os.path.dirname(__file__), "cache")
 os.makedirs(CACHE_DIR, exist_ok=True)
-
-INICIO_DEFAULT = "2008-01-01"
-FIN_DEFAULT    = "2026-01-01"
-MIN_OBS        = 1260  # ~5 años de datos diarios mínimos por ticker
 
 
 # ── Universo de activos ──────────────────────────────────────────────────────
@@ -146,6 +156,7 @@ def descargar_precios(
     """
     Devuelve DataFrame de precios de cierre ajustados (filas=fechas, columnas=tickers).
     Usa caché local; solo descarga si el archivo no existe o forzar_descarga=True.
+    Fuente: yfinance (histórico diario).
     """
     nombre_cache = f"precios_{inicio[:4]}_{fin[:4]}"
     ruta = _ruta_cache(nombre_cache)
@@ -153,24 +164,23 @@ def descargar_precios(
     if not forzar_descarga and os.path.exists(ruta):
         print(f"[CACHÉ] Cargando precios desde {ruta}")
         df = pd.read_parquet(ruta)
-        # Añadir tickers faltantes si el universo creció
         faltantes = [t for t in tickers if t not in df.columns]
         if faltantes:
             print(f"[INFO] Descargando {len(faltantes)} tickers nuevos...")
-            df_nuevo = _descargar_batch(faltantes, inicio, fin)
+            df_nuevo = _descargar_batch_yfinance(faltantes, inicio, fin)
             df = pd.concat([df, df_nuevo], axis=1)
             df.to_parquet(ruta)
         return df[sorted(df.columns)]
 
     print(f"[INFO] Descargando precios para {len(tickers)} tickers ({inicio} → {fin})...")
-    df = _descargar_batch(tickers, inicio, fin)
+    df = _descargar_batch_yfinance(tickers, inicio, fin)
     df.to_parquet(ruta)
     print(f"[OK] Precios guardados en {ruta}")
     return df
 
 
-def _descargar_batch(tickers: list[str], inicio: str, fin: str) -> pd.DataFrame:
-    """Descarga en lotes de 100 para evitar límites de rate de yfinance."""
+def _descargar_batch_yfinance(tickers: list[str], inicio: str, fin: str) -> pd.DataFrame:
+    """Descarga histórico diario en lotes de 100 desde yfinance."""
     batch_size = 100
     frames = []
     for i in range(0, len(tickers), batch_size):
@@ -180,11 +190,10 @@ def _descargar_batch(tickers: list[str], inicio: str, fin: str) -> pd.DataFrame:
                 lote,
                 start=inicio,
                 end=fin,
-                auto_adjust=True,   # precios ajustados por splits y dividendos
+                auto_adjust=True,
                 progress=False,
                 threads=True,
             )
-            # yfinance devuelve MultiIndex cuando hay >1 ticker
             if isinstance(raw.columns, pd.MultiIndex):
                 cierre = raw["Close"]
             else:
@@ -197,14 +206,267 @@ def _descargar_batch(tickers: list[str], inicio: str, fin: str) -> pd.DataFrame:
     return pd.concat(frames, axis=1)
 
 
+# ── Alpaca — histórico diario (out-of-sample: 2020-hoy) ──────────────────────
+
+def descargar_precios_alpaca(
+    tickers: list[str],
+    inicio: str = CORTE_IN_SAMPLE,
+    fin: str | None = None,
+    forzar_descarga: bool = False,
+) -> pd.DataFrame:
+    """
+    Descarga histórico diario desde Alpaca para el periodo out-of-sample.
+    Usado para backtesting (2020-hoy) y señales diarias.
+
+    Si Alpaca no está configurado cae a yfinance automáticamente.
+    """
+    fin = fin or datetime.now().strftime("%Y-%m-%d")
+
+    if not _ALPACA_DISPONIBLE:
+        print("[WARN] Alpaca no configurado. Usando yfinance como fallback.")
+        return descargar_precios(tickers, inicio=inicio, fin=fin, forzar_descarga=forzar_descarga)
+
+    try:
+        from alpaca.data.historical import StockHistoricalDataClient
+        from alpaca.data.requests import StockBarsRequest
+        from alpaca.data.timeframe import TimeFrame, TimeFrameUnit
+    except ImportError:
+        print("[WARN] alpaca-py no instalado. Ejecuta: pip install alpaca-py")
+        return descargar_precios(tickers, inicio=inicio, fin=fin, forzar_descarga=forzar_descarga)
+
+    nombre_cache = f"alpaca_diario_{inicio[:4]}_{fin[:4]}"
+    ruta = _ruta_cache(nombre_cache)
+
+    if not forzar_descarga and os.path.exists(ruta):
+        print(f"[CACHÉ] Cargando histórico Alpaca desde {ruta}")
+        df = pd.read_parquet(ruta)
+        faltantes = [t for t in tickers if t not in df.columns]
+        if not faltantes:
+            return df[sorted(df.columns)]
+
+    print(f"[ALPACA] Descargando histórico diario para {len(tickers)} tickers ({inicio} → {fin})...")
+
+    client  = StockHistoricalDataClient(ALPACA_API_KEY, ALPACA_API_SECRET)
+    frames  = []
+    # Alpaca tiene límite de símbolos por petición; lotes de 100
+    batch_size = 100
+    for i in range(0, len(tickers), batch_size):
+        lote = tickers[i : i + batch_size]
+        try:
+            request = StockBarsRequest(
+                symbol_or_symbols=lote,
+                timeframe=TimeFrame(1, TimeFrameUnit.Day),
+                start=inicio,
+                end=fin,
+                adjustment="all",  # ajustado por splits y dividendos
+                feed="iex",
+            )
+            bars = client.get_stock_bars(request).df
+            if bars.empty:
+                continue
+            if isinstance(bars.index, pd.MultiIndex):
+                cierre = bars["close"].unstack(level=0)
+            else:
+                cierre = bars[["close"]].rename(columns={"close": lote[0]})
+            cierre.index = pd.to_datetime(cierre.index).tz_localize(None)
+            frames.append(cierre)
+        except Exception as e:
+            print(f"  [WARN] Error Alpaca lote {i}-{i+batch_size}: {e}")
+
+    if not frames:
+        print("[WARN] Sin datos de Alpaca. Usando yfinance como fallback.")
+        return descargar_precios(tickers, inicio=inicio, fin=fin, forzar_descarga=forzar_descarga)
+
+    df = pd.concat(frames, axis=1).sort_index()
+    df.to_parquet(ruta)
+    print(f"[OK] Histórico Alpaca guardado en {ruta}")
+    return df
+
+
+def descargar_precios_combinado(
+    tickers: list[str],
+    forzar_descarga: bool = False,
+) -> pd.DataFrame:
+    """
+    Combina yfinance (2008-2020) y Alpaca (2020-hoy) en un único DataFrame diario.
+
+    Este es el punto de entrada principal para obtener el histórico completo:
+      - In-sample  (2008-2020): yfinance — histórico largo y fiable
+      - Out-of-sample (2020-hoy): Alpaca — datos recientes consistentes con señales en vivo
+
+    Returns:
+        DataFrame con precios de cierre ajustados (filas=fechas, columnas=tickers).
+    """
+    print("[INFO] Descargando histórico combinado yfinance + Alpaca...")
+
+    # Tramo in-sample: yfinance 2008 → corte
+    df_yf = descargar_precios(
+        tickers,
+        inicio=INICIO_DEFAULT,
+        fin=CORTE_IN_SAMPLE,
+        forzar_descarga=forzar_descarga,
+    )
+
+    # Tramo out-of-sample: Alpaca corte → hoy
+    df_alp = descargar_precios_alpaca(
+        tickers,
+        inicio=CORTE_IN_SAMPLE,
+        forzar_descarga=forzar_descarga,
+    )
+
+    # Unir verticalmente eliminando solapamientos
+    df_yf  = df_yf[df_yf.index  < CORTE_IN_SAMPLE]
+    df_alp = df_alp[df_alp.index >= CORTE_IN_SAMPLE]
+
+    df = pd.concat([df_yf, df_alp]).sort_index()
+
+    # Alinear columnas: solo tickers presentes en ambos tramos
+    tickers_comunes = [t for t in tickers if t in df.columns]
+    df = df[sorted(tickers_comunes)]
+
+    print(f"[OK] Histórico combinado: {df.index[0].date()} → {df.index[-1].date()} "
+          f"| {len(df)} días | {len(df.columns)} tickers")
+    return df
+
+
+# ── Alpaca — datos intradiarios ───────────────────────────────────────────────
+
+def descargar_precios_intradiarios(
+    tickers: list[str],
+    intervalo: str | None = None,
+    dias_atras: int = 5,
+    forzar_descarga: bool = False,
+) -> pd.DataFrame:
+    """
+    Descarga precios intradiarios desde Alpaca.
+
+    Requiere ALPACA_API_KEY y ALPACA_API_SECRET en .env.
+    Si Alpaca no está configurado, cae de vuelta a yfinance con el intervalo más cercano.
+
+    Args:
+        tickers:          Lista de tickers del S&P 500.
+        intervalo:        '1Min', '5Min', '15Min', '30Min', '1Hour'. Por defecto el del .env.
+        dias_atras:       Cuántos días de histórico intradiario descargar.
+        forzar_descarga:  Ignora caché y vuelve a descargar.
+
+    Returns:
+        DataFrame con precios de cierre (filas=timestamps, columnas=tickers).
+    """
+    intervalo = intervalo or ALPACA_INTERVALO
+
+    if not _ALPACA_DISPONIBLE:
+        print("[WARN] Alpaca no configurado. Usando yfinance como fallback.")
+        return _intradiario_yfinance_fallback(tickers, intervalo, dias_atras)
+
+    try:
+        from alpaca.data.historical import StockHistoricalDataClient
+        from alpaca.data.requests import StockBarsRequest
+        from alpaca.data.timeframe import TimeFrame, TimeFrameUnit
+    except ImportError:
+        print("[WARN] alpaca-trade-api no instalado. Ejecuta: pip install alpaca-py")
+        print("[WARN] Usando yfinance como fallback.")
+        return _intradiario_yfinance_fallback(tickers, intervalo, dias_atras)
+
+    _MAP_TIMEFRAME = {
+        "1Min":  TimeFrame(1,  TimeFrameUnit.Minute),
+        "5Min":  TimeFrame(5,  TimeFrameUnit.Minute),
+        "15Min": TimeFrame(15, TimeFrameUnit.Minute),
+        "30Min": TimeFrame(30, TimeFrameUnit.Minute),
+        "1Hour": TimeFrame(1,  TimeFrameUnit.Hour),
+    }
+    if intervalo not in _MAP_TIMEFRAME:
+        raise ValueError(f"Intervalo '{intervalo}' no válido. Opciones: {list(_MAP_TIMEFRAME)}")
+
+    nombre_cache = f"intradiario_{intervalo}_{dias_atras}d"
+    ruta = _ruta_cache(nombre_cache)
+
+    if not forzar_descarga and os.path.exists(ruta):
+        ts_cache = datetime.fromtimestamp(os.path.getmtime(ruta))
+        # Reusar caché si tiene menos de 1 hora
+        if datetime.now() - ts_cache < timedelta(hours=1):
+            print(f"[CACHÉ] Datos intradiarios recientes ({intervalo}) desde {ruta}")
+            return pd.read_parquet(ruta)
+
+    fin_dt    = datetime.now()
+    inicio_dt = fin_dt - timedelta(days=dias_atras)
+
+    print(f"[ALPACA] Descargando datos {intervalo} para {len(tickers)} tickers...")
+
+    client = StockHistoricalDataClient(ALPACA_API_KEY, ALPACA_API_SECRET)
+    request = StockBarsRequest(
+        symbol_or_symbols=tickers,
+        timeframe=_MAP_TIMEFRAME[intervalo],
+        start=inicio_dt,
+        end=fin_dt,
+        feed="iex",  # feed gratuito (IEX); cambiar a "sip" con plan de pago
+    )
+
+    try:
+        bars = client.get_stock_bars(request).df
+    except Exception as e:
+        print(f"[ERROR] Alpaca: {e}")
+        print("[WARN] Usando yfinance como fallback.")
+        return _intradiario_yfinance_fallback(tickers, intervalo, dias_atras)
+
+    # Alpaca devuelve MultiIndex (symbol, timestamp) → pivotar a columnas por ticker
+    if isinstance(bars.index, pd.MultiIndex):
+        df = bars["close"].unstack(level=0)
+    else:
+        df = bars[["close"]].rename(columns={"close": tickers[0]})
+
+    df.index = pd.to_datetime(df.index, utc=True).tz_convert("America/New_York")
+    df = df.sort_index()
+    df.to_parquet(ruta)
+    print(f"[OK] {len(df)} velas {intervalo} guardadas en {ruta}")
+    return df
+
+
+def _intradiario_yfinance_fallback(
+    tickers: list[str], intervalo: str, dias_atras: int
+) -> pd.DataFrame:
+    """Fallback a yfinance cuando Alpaca no está disponible."""
+    _MAP_YF = {
+        "1Min":  ("1m",  7),
+        "5Min":  ("5m",  60),
+        "15Min": ("15m", 60),
+        "30Min": ("30m", 60),
+        "1Hour": ("1h",  730),
+    }
+    yf_intervalo, max_dias = _MAP_YF.get(intervalo, ("1h", 730))
+    dias = min(dias_atras, max_dias)
+    fin_dt    = datetime.now()
+    inicio_dt = fin_dt - timedelta(days=dias)
+
+    frames = []
+    for ticker in tickers:
+        try:
+            raw = yf.download(
+                ticker,
+                start=inicio_dt.strftime("%Y-%m-%d"),
+                end=fin_dt.strftime("%Y-%m-%d"),
+                interval=yf_intervalo,
+                auto_adjust=True,
+                progress=False,
+            )
+            if not raw.empty:
+                frames.append(raw["Close"].rename(ticker))
+        except Exception as e:
+            print(f"  [WARN] yfinance fallback error en {ticker}: {e}")
+
+    if not frames:
+        return pd.DataFrame()
+    return pd.concat(frames, axis=1)
+
+
 # ── Limpieza ─────────────────────────────────────────────────────────────────
 
 def filtrar_datos(df: pd.DataFrame, min_obs: int = MIN_OBS) -> pd.DataFrame:
     """Elimina tickers con datos insuficientes y rellena huecos menores."""
     # Eliminar columnas con demasiados NaN
     df = df.dropna(axis=1, thresh=min_obs)
-    # Rellenar huecos cortos (fines de semana, festivos) con forward-fill
-    df = df.ffill().bfill()
+    # Solo forward-fill: propagar último precio conocido hacia adelante.
+    # bfill está prohibido — usaría precios futuros para rellenar el pasado (look-ahead bias).
+    df = df.ffill()
     return df
 
 
@@ -220,11 +482,12 @@ def preparar_par(df: pd.DataFrame, t1: str, t2: str) -> pd.DataFrame | None:
 
 def dividir_muestra(
     df: pd.DataFrame,
-    corte: str = "2020-01-01",
+    corte: str = CORTE_IN_SAMPLE,
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
     """
     Divide en in-sample (detección de pares) y out-of-sample (backtesting).
-    Por defecto: 2008-2020 in-sample | 2020-2026 out-of-sample.
+    Por defecto: 2008-2020 in-sample (yfinance) | 2020-hoy out-of-sample (Alpaca).
+    El corte se configura en config.py → CORTE_IN_SAMPLE.
     """
     in_sample  = df[df.index < corte]
     out_sample = df[df.index >= corte]

@@ -18,5 +18,9 @@ __pycache__/
 señales_diarias.csv
 estado_posiciones.json
 
+# Variables de entorno y claves API (NUNCA subir al repositorio)
+.env
+.env.local
+
 # macOS
 .DS_Store
