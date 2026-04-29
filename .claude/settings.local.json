@@ -10,7 +10,10 @@
       "Bash(xargs ls *)",
       "Bash(git rm *)",
       "Bash(git add *)",
-      "Bash(git commit -m ' *)"
+      "Bash(git commit -m ' *)",
+      "Bash(git rev-list *)",
+      "Bash(git cat-file *)",
+      "Bash(awk '$1==\"blob\" && $3>500000 {print $3, $4}')"
     ]
   }
 }
