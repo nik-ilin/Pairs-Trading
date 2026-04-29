@@ -1,7 +1,11 @@
 {
   "permissions": {
     "allow": [
-      "Bash(awk '{print $5, $9}')"
+      "Bash(awk '{print $5, $9}')",
+      "Bash(.venv/bin/pip install *)",
+      "Bash(.venv/bin/python -c \"from datos import filtrar_universo_interactivo, obtener_sp500_completo; print\\('imports OK'\\)\")",
+      "Bash(.venv/bin/python -c \"from main import _seleccionar_pares_interactivo, _seleccionar_de_csv, modo_scan; print\\('main imports OK'\\)\")",
+      "Bash(.venv/bin/python -c \"from evaluacion import generar_informe_completo, grafico_rolling_cointegracion; print\\('evaluacion imports OK'\\)\")"
     ]
   }
 }

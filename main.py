@@ -21,6 +21,7 @@ import pandas as pd
 
 from datos import (
     obtener_sp500,
+    filtrar_universo_interactivo,
     descargar_precios,
     filtrar_datos,
     dividir_muestra,
@@ -55,12 +56,128 @@ from metricas import reporte_completo
 warnings.filterwarnings("ignore")
 
 
+# ── Helpers interactivos ──────────────────────────────────────────────────────
+
+def _seleccionar_pares_interactivo(pares_df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Muestra todos los pares cointegrados encontrados con sus métricas clave
+    y permite al usuario elegir cuáles conservar para el análisis posterior.
+    """
+    if pares_df.empty:
+        return pares_df
+
+    pares_df = pares_df.reset_index(drop=True)
+
+    print(f"\n{'='*72}")
+    print(f"  PARES COINTEGRADOS ENCONTRADOS: {len(pares_df)}")
+    print(f"{'='*72}")
+    print(f"  {'#':>4}  {'Par':<14}  {'Score':>7}  {'Traza':>7}  {'p-EG':>7}  {'Obs':>6}")
+    print(f"  {'─'*4}  {'─'*14}  {'─'*7}  {'─'*7}  {'─'*7}  {'─'*6}")
+
+    for i, row in pares_df.iterrows():
+        par = f"{row['ticker1']}/{row['ticker2']}"
+        print(f"  {i+1:>4}  {par:<14}  {row['score']:>7.4f}  {row['traza']:>7.2f}"
+              f"  {row['p_value_eg']:>7.4f}  {row['n_obs']:>6}")
+
+    print()
+    print("  Score  = fuerza de cointegración Johansen (>1 = válido, mayor = mejor)")
+    print("  Traza  = estadístico de traza de Johansen")
+    print("  p-EG   = p-value Engle-Granger (<0.05 = cointegrado)")
+    print()
+    print("  ¿Qué pares deseas guardar para el análisis?")
+    print("    Números separados por coma  →  ej: 1,3,5")
+    print("    Rango con guión             →  ej: 1-10")
+    print("    ENTER sin texto             →  guardar todos")
+    print()
+
+    entrada = input("  Tu selección: ").strip()
+
+    if not entrada:
+        print(f"  [OK] Guardando todos los {len(pares_df)} pares.")
+        return pares_df
+
+    indices: set[int] = set()
+    try:
+        for parte in entrada.split(","):
+            parte = parte.strip()
+            if "-" in parte:
+                a, b = parte.split("-", 1)
+                indices.update(range(int(a) - 1, int(b)))
+            else:
+                indices.add(int(parte) - 1)
+        validos = [i for i in sorted(indices) if 0 <= i < len(pares_df)]
+        resultado = pares_df.iloc[validos].reset_index(drop=True)
+        print(f"  [OK] {len(resultado)} pares seleccionados.")
+        return resultado
+    except (ValueError, IndexError):
+        print("  [WARN] Selección inválida. Guardando todos los pares.")
+        return pares_df
+
+
+def _seleccionar_de_csv(top_n: int) -> list[dict]:
+    """
+    Carga el CSV de pares, muestra una tabla resumida y
+    permite al usuario elegir cuáles backtestar interactivamente.
+    """
+    try:
+        pares_df = top_pares(n=top_n)
+    except FileNotFoundError:
+        print("[!] Ejecuta primero --modo scan para generar pares_cointegrados.csv")
+        return []
+
+    pares_df = pares_df.reset_index(drop=True)
+
+    print(f"\n{'='*72}")
+    print(f"  PARES DISPONIBLES EN CSV (top {top_n})")
+    print(f"{'='*72}")
+    print(f"  {'#':>4}  {'Par':<14}  {'Score':>7}  {'Traza':>7}  {'p-EG':>7}")
+    print(f"  {'─'*4}  {'─'*14}  {'─'*7}  {'─'*7}  {'─'*7}")
+
+    for i, row in pares_df.iterrows():
+        par = f"{row['ticker1']}/{row['ticker2']}"
+        print(f"  {i+1:>4}  {par:<14}  {row['score']:>7.4f}  {row['traza']:>7.2f}"
+              f"  {row['p_value_eg']:>7.4f}")
+
+    print()
+    print("  ¿Qué pares deseas backtestar?")
+    print("    Números separados por coma  →  ej: 1,3")
+    print("    Rango con guión             →  ej: 1-5")
+    print("    ENTER sin texto             →  backtestar todos los mostrados")
+    print()
+
+    entrada = input("  Tu selección: ").strip()
+
+    if not entrada:
+        return pares_df.to_dict("records")
+
+    indices: set[int] = set()
+    try:
+        for parte in entrada.split(","):
+            parte = parte.strip()
+            if "-" in parte:
+                a, b = parte.split("-", 1)
+                indices.update(range(int(a) - 1, int(b)))
+            else:
+                indices.add(int(parte) - 1)
+        validos = [i for i in sorted(indices) if 0 <= i < len(pares_df)]
+        return pares_df.iloc[validos].to_dict("records")
+    except (ValueError, IndexError):
+        print("  [WARN] Selección inválida. Usando todos los pares.")
+        return pares_df.to_dict("records")
+
+
 # ── Modos de ejecución ────────────────────────────────────────────────────────
 
 def modo_scan(args) -> None:
     """Detecta pares cointegrados en el universo (in-sample 2008-2020)."""
     print("\n[MODO: SCAN]")
-    tickers  = obtener_sp500()
+
+    # En modo full el filtro interactivo se omite para no bloquear el pipeline
+    if getattr(args, "interactivo", True):
+        tickers = filtrar_universo_interactivo()
+    else:
+        tickers = obtener_sp500()
+
     precios  = descargar_precios(tickers, INICIO_DEFAULT, FIN_DEFAULT)
     precios  = filtrar_datos(precios)
     in_sample, _ = dividir_muestra(precios, corte="2020-01-01")
@@ -76,9 +193,11 @@ def modo_scan(args) -> None:
         print("[!] No se encontraron pares cointegrados.")
         return
 
+    # Selección interactiva de qué pares conservar
+    if getattr(args, "interactivo", True):
+        pares = _seleccionar_pares_interactivo(pares)
+
     guardar_pares(pares)
-    print(f"\nTop 10 pares cointegrados:")
-    print(pares.head(10).to_string(index=False))
 
 
 def modo_backtest(args) -> None:
@@ -90,10 +209,14 @@ def modo_backtest(args) -> None:
     precios = filtrar_datos(precios)
     _, out_sample = dividir_muestra(precios, corte="2020-01-01")
 
-    # Par específico o top pares del CSV
+    # Par específico o selección interactiva desde CSV
     if args.par:
         t1, t2 = args.par[0], args.par[1]
         pares_lista = [{"ticker1": t1, "ticker2": t2}]
+    elif getattr(args, "interactivo", True):
+        pares_lista = _seleccionar_de_csv(args.top_n)
+        if not pares_lista:
+            return
     else:
         try:
             pares_df = top_pares(n=args.top_n)
@@ -170,14 +293,15 @@ def modo_señales(args) -> None:
 
 
 def modo_full(args) -> None:
-    """Pipeline completo: scan → backtest → evaluar los mejores pares."""
+    """Pipeline completo no interactivo: scan → backtest top-5 → gráficos."""
     print("\n[MODO: FULL PIPELINE]")
-    modo_scan(args)
-    args.top_n     = 5
-    args.optimizar = True
+    args.interactivo  = False   # omitir todos los diálogos interactivos
+    args.top_n        = 5
+    args.optimizar    = True
     args.walk_forward = True
-    args.graficos  = True
-    args.par       = None
+    args.graficos     = True
+    args.par          = None
+    modo_scan(args)
     modo_backtest(args)
 
 

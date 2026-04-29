@@ -41,6 +41,86 @@ def obtener_sp500():
         ]
 
 
+def obtener_sp500_completo() -> pd.DataFrame:
+    """Descarga el S&P 500 con metadatos de sector desde Wikipedia."""
+    try:
+        tabla = pd.read_html("https://en.wikipedia.org/wiki/List_of_S%26P_500_companies")[0]
+        tabla["Symbol"] = tabla["Symbol"].str.replace(".", "-", regex=False)
+        return tabla[["Symbol", "Security", "GICS Sector", "GICS Sub-Industry"]].rename(
+            columns={"Symbol": "ticker", "Security": "nombre",
+                     "GICS Sector": "sector", "GICS Sub-Industry": "subsector"}
+        )
+    except Exception:
+        tickers = obtener_sp500()
+        return pd.DataFrame({
+            "ticker": tickers,
+            "nombre": tickers,
+            "sector": "N/A",
+            "subsector": "N/A",
+        })
+
+
+def filtrar_universo_interactivo() -> list[str]:
+    """
+    Diálogo interactivo para filtrar el universo S&P 500 por sector antes del scan.
+    Permite elegir uno o varios sectores, o saltar el filtro y usar el universo completo.
+    Devuelve lista de tickers a analizar.
+    """
+    print("\n" + "=" * 62)
+    print("  FILTRO DE UNIVERSO — S&P 500")
+    print("=" * 62)
+    print("  Puedes limitar la búsqueda a sectores específicos para")
+    print("  reducir el tiempo de cómputo y enfocar los resultados.")
+    print()
+
+    sp500_df = obtener_sp500_completo()
+    sectores = sorted(sp500_df["sector"].dropna().unique())
+
+    print("  Sectores disponibles:")
+    for i, s in enumerate(sectores, 1):
+        n = (sp500_df["sector"] == s).sum()
+        print(f"    {i:2}. {s:<45} ({n:>3} empresas)")
+
+    print()
+    print("  Opciones de selección:")
+    print("    Números separados por coma  →  ej: 1,3,7")
+    print("    Rango con guión             →  ej: 2-5")
+    print("    ENTER sin texto             →  usar todo el S&P 500")
+    print()
+
+    entrada = input("  Tu selección: ").strip()
+
+    if not entrada:
+        tickers = sp500_df["ticker"].tolist()
+        print(f"\n  [OK] Universo completo: {len(tickers)} tickers")
+        return tickers
+
+    # Parsear selección con soporte de rangos y listas
+    indices: set[int] = set()
+    try:
+        for parte in entrada.split(","):
+            parte = parte.strip()
+            if "-" in parte:
+                a, b = parte.split("-", 1)
+                indices.update(range(int(a) - 1, int(b)))
+            else:
+                indices.add(int(parte) - 1)
+        sectores_sel = [sectores[i] for i in sorted(indices) if 0 <= i < len(sectores)]
+    except (ValueError, IndexError):
+        print("  [WARN] Selección inválida. Usando universo completo.")
+        return sp500_df["ticker"].tolist()
+
+    if not sectores_sel:
+        print("  [WARN] Sin sectores válidos. Usando universo completo.")
+        return sp500_df["ticker"].tolist()
+
+    filtrado = sp500_df[sp500_df["sector"].isin(sectores_sel)]
+    tickers = filtrado["ticker"].tolist()
+    print(f"\n  [OK] Sectores: {', '.join(sectores_sel)}")
+    print(f"       Total tickers a escanear: {len(tickers)}")
+    return tickers
+
+
 def obtener_tickers_url():
     """Descarga tickers ampliados desde GitHub (fallback al S&P 500)."""
     url = "https://raw.githubusercontent.com/rreichel3/US-Stock-Symbols/main/all/all_tickers.txt"

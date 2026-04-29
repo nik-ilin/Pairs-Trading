@@ -340,7 +340,7 @@ def grafico_monte_carlo(
 
     plt.tight_layout()
     if guardar:
-        _guardar(f"06_monte_carlo_{nombre_par.replace('/', '_')}.png")
+        _guardar(f"03_monte_carlo_{nombre_par.replace('/', '_')}.png")
     plt.show()
 
 
@@ -373,7 +373,7 @@ def grafico_rolling_cointegracion(
     ax.grid(True, alpha=0.4)
     plt.tight_layout()
     if guardar:
-        _guardar(f"07_rolling_cointegracion_{nombre_par.replace('/', '_')}.png")
+        _guardar(f"04_rolling_cointegracion_{nombre_par.replace('/', '_')}.png")
     plt.show()
 
 
@@ -546,7 +546,7 @@ def panel_metricas(
 
     plt.tight_layout()
     if guardar:
-        _guardar(f"11_panel_metricas_{nombre_par.replace('/', '_')}.png")
+        _guardar(f"05_panel_metricas_{nombre_par.replace('/', '_')}.png")
     plt.show()
 
 
@@ -554,30 +554,32 @@ def panel_metricas(
 
 def generar_informe_completo(resultado_backtest: dict, nombre_par: str, guardar: bool = True) -> None:
     """
-    Genera todos los gráficos de presentación a partir del resultado del backtest.
+    Genera los 4 gráficos esenciales para presentación del par.
     Acepta el diccionario devuelto por backtesting.backtest_completo().
-    """
-    ret     = resultado_backtest["retornos"]
-    spread  = resultado_backtest["spread"]
-    zscore  = resultado_backtest["zscore"]
-    señales = resultado_backtest["señales"]
-    beta    = resultado_backtest["beta"]
-    trades  = resultado_backtest["trades"]
-    metricas = resultado_backtest["metricas"]
-    mc      = resultado_backtest.get("monte_carlo", {})
-    bs      = resultado_backtest.get("bootstrap_sharpe", None)
-    perm    = resultado_backtest.get("permutaciones", None)
 
-    print(f"\n[INFO] Generando informe completo para {nombre_par}...")
+    Gráficos generados:
+      01_curva_capital       — curva de capital + drawdown
+      02_spread_zscore       — spread y z-score con señales de entrada/salida
+      03_monte_carlo         — simulación Monte Carlo (1 año hacia adelante)
+      05_panel_metricas      — tabla resumen con todas las métricas y semáforos SMART
+
+    El gráfico 04_rolling_cointegracion se genera por separado desde modo_backtest/modo_evaluar.
+    """
+    ret      = resultado_backtest["retornos"]
+    spread   = resultado_backtest["spread"]
+    zscore   = resultado_backtest["zscore"]
+    señales  = resultado_backtest["señales"]
+    metricas = resultado_backtest["metricas"]
+    mc       = resultado_backtest.get("monte_carlo", {})
+    bs       = resultado_backtest.get("bootstrap_sharpe", None)
+    perm     = resultado_backtest.get("permutaciones", None)
+
+    print(f"\n[INFO] Generando informe para {nombre_par}...")
 
     grafico_curva_capital(ret, nombre_par=nombre_par, guardar=guardar)
     grafico_spread_zscore(spread, zscore, señales, nombre_par=nombre_par, guardar=guardar)
-    grafico_rolling_sharpe(ret, nombre_par=nombre_par, guardar=guardar)
-    grafico_distribucion_retornos(ret, nombre_par=nombre_par, guardar=guardar)
-    grafico_heatmap_mensual(ret, nombre_par=nombre_par, guardar=guardar)
     if mc:
         grafico_monte_carlo(mc, ret, nombre_par=nombre_par, guardar=guardar)
-    grafico_duracion_trades(trades, nombre_par=nombre_par, guardar=guardar)
     panel_metricas(metricas, bs, perm, nombre_par=nombre_par, guardar=guardar)
 
-    print(f"[OK] Informe completo generado en {GRAFICOS_DIR}/")
+    print(f"[OK] Informe generado en {GRAFICOS_DIR}/ (4 gráficos + rolling coint. aparte)")
