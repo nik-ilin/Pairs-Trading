@@ -33,9 +33,16 @@ from spread import (
 )
 from deteccion import escanear_todos_los_pares, guardar_pares, cargar_pares, test_johansen
 from config import (
-    BUFFER_DIAS, BOLLINGER_WINDOW, BOLLINGER_N_STD,
-    MIN_OBS_HORARIO, UMBRAL_EG, VENTANA_COINT_ACTIVA,
+    MIN_OBS_HORARIO, UMBRAL_EG, VENTANA_COINT_ACTIVA, HORAS_DIA,
 )
+
+
+def _bpd(index: pd.DatetimeIndex) -> float:
+    """Barras por día de negociación: HORAS_DIA para horario, 1.0 para diario."""
+    if len(index) < 10:
+        return 1.0
+    n_dias = pd.Series(index).dt.date.nunique()
+    return HORAS_DIA if (len(index) / max(n_dias, 1)) > 2 else 1.0
 
 warnings.filterwarnings("ignore")
 
@@ -143,18 +150,6 @@ def regimen_volatilidad(spread: pd.Series, ventana_vol: int = 20) -> str:
     return "NORMAL"
 
 
-def bollinger_spread(spread: pd.Series, window: int = BOLLINGER_WINDOW,
-                     n_std: float = BOLLINGER_N_STD) -> dict:
-    """Bandas de Bollinger sobre el spread para visualización."""
-    media = spread.rolling(window).mean()
-    std   = spread.rolling(window).std()
-    return {
-        "media":     media,
-        "banda_sup": media + n_std * std,
-        "banda_inf": media - n_std * std,
-    }
-
-
 # ── Verificación diaria de cointegración activa ───────────────────────────────
 
 def verificar_cointegración_activa(
@@ -176,10 +171,11 @@ def verificar_cointegración_activa(
     s2 = df_close[t2].dropna()
     idx = s1.index.intersection(s2.index)
 
-    if len(idx) < ventana:
+    ventana_barras = int(ventana * _bpd(df_close.index))
+    if len(idx) < ventana_barras:
         return {"cointegrado": False, "alerta": "Datos insuficientes para verificar"}
 
-    s1_rec = np.log(s1.loc[idx].iloc[-ventana:])
+    s1_rec = np.log(s1.loc[idx].iloc[-ventana_barras:])
     s2_rec = np.log(s2.loc[idx].iloc[-ventana:])
 
     try:
@@ -267,7 +263,8 @@ def evaluar_par(
 
     spread, beta, alpha = calcular_spread_kalman(df_close, t1, t2)
 
-    ventana_ou = min(MIN_OBS_HORARIO, len(spread))
+    min_obs    = max(30, int(MIN_OBS_HORARIO / HORAS_DIA * _bpd(df_close.index)))
+    ventana_ou = min(min_obs, len(spread))
     ou         = parametros_ou(spread.tail(ventana_ou))
     hl         = ou["half_life"]
     window     = max(5, int(np.ceil(hl)))

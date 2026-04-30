@@ -78,9 +78,9 @@ def _seleccionar_pares_interactivo(pares_df: pd.DataFrame) -> pd.DataFrame:
     print("  p-EG   = p-value Engle-Granger (<0.05 = cointegrado)")
     print()
     print("  ¿Qué pares deseas guardar?")
-    print("    Números por coma  →  ej: 1,3,5")
-    print("    Rango con guión   →  ej: 1-10")
-    print("    ENTER             →  guardar todos")
+    print("    Numeros por coma  ->  ej: 1,3,5")
+    print("    Rango con guion   ->  ej: 1-10")
+    print("    ENTER             ->  guardar todos")
     print()
 
     entrada = input("  Tu selección: ").strip()
@@ -128,8 +128,8 @@ def _seleccionar_de_csv(top_n: int) -> list[dict]:
 
     print()
     print("  ¿Qué pares deseas backtestar?")
-    print("    Números por coma  →  ej: 1,3")
-    print("    ENTER             →  backtestar todos")
+    print("    Numeros por coma  ->  ej: 1,3")
+    print("    ENTER             ->  backtestar todos")
     print()
 
     entrada = input("  Tu selección: ").strip()

@@ -85,11 +85,6 @@ BS_NIVEL_CONFIANZA = 0.95
 PERM_N            = 500
 PERM_SEMILLA      = 42
 
-# ── Pipeline diario (automatizacion.py) ──────────────────────────────────────
-BUFFER_DIAS       = 180            # días de historial para calcular z-score
-BOLLINGER_WINDOW  = 20             # ventana de las bandas de Bollinger
-BOLLINGER_N_STD   = 2.0            # número de desviaciones para las bandas
-
 # ── Métricas y objetivos SMART (metricas.py) ─────────────────────────────────
 TASA_LIBRE_RIESGO = 0.0            # tasa libre de riesgo anual (0 = efectivo)
 VAR_NIVEL         = 0.05           # nivel de confianza para VaR/CVaR (5%)

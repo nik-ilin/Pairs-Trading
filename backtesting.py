@@ -348,9 +348,9 @@ def optimizar_parametros(
         window_zscore=None if pd.isna(mejor["window_zscore"]) else int(mejor["window_zscore"]),
     )
 
-    print(f"[OK] Mejores parámetros (IS): entrada={mejor['entrada_z']}, "
+    print(f"[OK] Mejores parametros (IS): entrada={mejor['entrada_z']}, "
           f"salida={mejor['salida_z']}, window={mejor['window_zscore']} "
-          f"→ {metrica.upper()} = {mejor[metrica]:.3f}")
+          f"-> {metrica.upper()} = {mejor[metrica]:.3f}")
 
     return params_optimos, df_grid
 

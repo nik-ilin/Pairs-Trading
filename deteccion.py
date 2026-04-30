@@ -20,8 +20,21 @@ from statsmodels.tsa.vector_ar.vecm import coint_johansen
 
 from config import (
     MIN_OBS_HORARIO, UMBRAL_EG, MIN_SCORE_JOHANSEN,
-    VENTANA_ROLLING,
+    VENTANA_ROLLING, HORAS_DIA,
 )
+
+
+def _bpd(index: pd.DatetimeIndex) -> float:
+    """Barras por día de negociación: HORAS_DIA para horario, 1.0 para diario."""
+    if len(index) < 10:
+        return 1.0
+    n_dias = pd.Series(index).dt.date.nunique()
+    return HORAS_DIA if (len(index) / max(n_dias, 1)) > 2 else 1.0
+
+
+def _min_obs(index: pd.DatetimeIndex) -> int:
+    """Mínimo de observaciones escalado según la frecuencia de los datos (margen 20%)."""
+    return max(30, int(MIN_OBS_HORARIO / HORAS_DIA * _bpd(index) * 0.8))
 
 warnings.filterwarnings("ignore")
 
@@ -57,7 +70,7 @@ def test_johansen(s1: pd.Series, s2: pd.Series) -> dict:
         dict con cointegrado (bool), traza, critico, score.
     """
     log_par = np.log(pd.concat([s1, s2], axis=1)).dropna()
-    if len(log_par) < MIN_OBS_HORARIO:
+    if len(log_par) < _min_obs(s1.index):
         return {"cointegrado": False, "traza": 0.0, "critico": 0.0, "score": 0.0}
     try:
         res     = coint_johansen(log_par, det_order=0, k_ar_diff=1)
@@ -104,6 +117,7 @@ def escanear_todos_los_pares(
     todos_pares = list(itertools.combinations(tickers, 2))
     if max_pares:
         todos_pares = todos_pares[:max_pares]
+    min_obs_req = _min_obs(df_precios.index)
 
     if verbose:
         print(f"\n{'='*60}")
@@ -120,7 +134,7 @@ def escanear_todos_los_pares(
         s1 = df_precios[t1].dropna()
         s2 = df_precios[t2].dropna()
         idx = s1.index.intersection(s2.index)
-        if len(idx) < MIN_OBS_HORARIO:
+        if len(idx) < min_obs_req:
             continue
         s1, s2 = s1.loc[idx], s2.loc[idx]
 
@@ -168,7 +182,7 @@ def estabilidad_rolling(
     precios: pd.DataFrame,
     t1: str,
     t2: str,
-    ventana: int = VENTANA_ROLLING,
+    ventana: int | None = None,
 ) -> pd.DataFrame:
     """
     Evalúa la cointegración en ventanas rolling para visualización.
@@ -179,6 +193,9 @@ def estabilidad_rolling(
     """
     if t1 not in precios.columns or t2 not in precios.columns:
         return pd.DataFrame()
+
+    if ventana is None:
+        ventana = max(30, int(VENTANA_ROLLING / HORAS_DIA * _bpd(precios.index)))
 
     log_par = np.log(precios[[t1, t2]]).dropna()
     if len(log_par) < ventana + 10:

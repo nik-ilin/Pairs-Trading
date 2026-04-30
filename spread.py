@@ -34,10 +34,13 @@ from config import (
     VENTANA_VOL, CAPITAL_INICIAL, FRACCION_RIESGO,
 )
 
-# Límites del half-life en barras horarias
-_HL_MIN_BARRAS = HL_MIN_DIAS  * HORAS_DIA   # 5  días × 6.5h = 32.5 barras
-_HL_MAX_BARRAS = HL_MAX_DIAS  * HORAS_DIA   # 252 días × 6.5h = 1638 barras
-_VENTANA_VOL_BARRAS = int(VENTANA_VOL * HORAS_DIA)  # 20 días × 6.5h = 130 barras
+
+def _bpd(index: pd.DatetimeIndex) -> float:
+    """Barras por día de negociación: HORAS_DIA para horario, 1.0 para diario."""
+    if len(index) < 10:
+        return 1.0
+    n_dias = pd.Series(index).dt.date.nunique()
+    return HORAS_DIA if (len(index) / max(n_dias, 1)) > 2 else 1.0
 
 
 # ── Filtro de Kalman para hedge ratio dinámico ────────────────────────────────
@@ -77,9 +80,8 @@ def kalman_hedge_ratio(
     P     = np.zeros((n, 2, 2))
     P[0]  = np.eye(2) * 1.0
 
-    # Estimación inicial con OLS sobre los primeros puntos de warm-up
-    # Con datos horarios, 390 barras ≈ 60 días de negociación
-    warmup = int(60 * HORAS_DIA)
+    # Warmup: 60 días de negociación independientemente de la frecuencia
+    warmup = int(60 * _bpd(y.index))
     if n >= warmup:
         X0 = add_constant(x_arr[:warmup])
         ols = OLS(y_arr[:warmup], X0).fit()
@@ -137,8 +139,9 @@ def calcular_half_life(spread: pd.Series) -> float:
         # Sin reversión a la media → spread no es estacionario
         return np.inf
 
+    bpd = _bpd(spread.index)
     half_life = float(-np.log(2) / b)
-    return max(_HL_MIN_BARRAS, min(half_life, _HL_MAX_BARRAS))
+    return max(HL_MIN_DIAS * bpd, min(half_life, HL_MAX_DIAS * bpd))
 
 
 def parametros_ou(spread: pd.Series) -> dict:
@@ -150,11 +153,12 @@ def parametros_ou(spread: pd.Series) -> dict:
     ols = OLS(delta_s.values, X).fit()
     a, b = ols.params[0], ols.params[1]
 
+    bpd       = _bpd(spread.index)
     kappa     = max(-b, 1e-8)
     mu        = -a / b if b != 0 else float(spread.mean())
     sigma_res = float(ols.resid.std())
     half_life = float(np.log(2) / kappa)
-    half_life = max(_HL_MIN_BARRAS, min(half_life, _HL_MAX_BARRAS))
+    half_life = max(HL_MIN_DIAS * bpd, min(half_life, HL_MAX_DIAS * bpd))
 
     return {"kappa": kappa, "mu": mu, "sigma": sigma_res, "half_life": half_life}
 
@@ -266,7 +270,7 @@ def generar_señales(
 def tamaño_posicion_volatilidad(
     spread: pd.Series,
     capital: float = CAPITAL_INICIAL,
-    ventana_vol: int = _VENTANA_VOL_BARRAS,
+    ventana_vol: int | None = None,
     fraccion: float = FRACCION_RIESGO,
 ) -> pd.Series:
     """
@@ -277,6 +281,8 @@ def tamaño_posicion_volatilidad(
     Principio: cuanto más volátil el spread, menor la posición para mantener
     una exposición al riesgo constante en términos de unidades monetarias.
     """
+    if ventana_vol is None:
+        ventana_vol = max(5, int(VENTANA_VOL * _bpd(spread.index)))
     vol    = spread.rolling(ventana_vol).std()
     vol    = vol.replace(0, np.nan).ffill().bfill()
     tamaño = (capital * fraccion) / vol

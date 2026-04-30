@@ -23,7 +23,7 @@ warnings.filterwarnings("ignore")
 from config import (
     ALPACA_API_KEY, ALPACA_API_SECRET,
     INICIO_DEFAULT, FIN_DEFAULT, MIN_OBS,
-    CORTE_IN_SAMPLE, MIN_VOLUMEN_DIARIO,
+    MIN_VOLUMEN_DIARIO,
     MERCADO_ZONA_HORARIA, MERCADO_APERTURA, MERCADO_CIERRE,
 )
 
@@ -108,45 +108,156 @@ def _cache_vigente(ruta: str, max_horas: float) -> bool:
 
 # ── Universo de activos ──────────────────────────────────────────────────────
 
-def obtener_sp500():
-    """Descarga la lista actual del S&P 500 desde Wikipedia."""
+_FUENTES_SP500 = [
+    # GitHub - datahub.io (CSV mantenido por la comunidad, actualizado regularmente)
+    "https://raw.githubusercontent.com/datasets/s-and-p-500-companies/main/data/constituents.csv",
+    # Wikipedia como segunda opción
+    None,
+]
+
+# Lista de respaldo hardcodeada — cubre los 100 componentes más líquidos del S&P 500
+_SP500_FALLBACK = [
+    # Tecnología
+    "AAPL","MSFT","NVDA","AVGO","ORCL","CRM","CSCO","IBM","TXN","QCOM",
+    "AMAT","ADI","MU","INTC","NOW","INTU","PANW","KLAC","LRCX","SNPS",
+    # Consumo discrecional
+    "AMZN","TSLA","HD","MCD","NKE","SBUX","LOW","TJX","BKNG","MAR",
+    # Comunicaciones
+    "GOOGL","META","NFLX","DIS","CMCSA","VZ","T","TMUS",
+    # Salud
+    "LLY","UNH","JNJ","ABBV","MRK","TMO","ABT","DHR","BMY","AMGN",
+    "ISRG","SYK","GILD","REGN","VRTX","CI","CVS","MCK","ELV","HCA",
+    # Financiero
+    "BRK-B","JPM","V","MA","BAC","WFC","GS","MS","BLK","SPGI",
+    "C","AXP","CB","MMC","AON","USB","PNC","TFC","COF","ICE",
+    # Consumo básico
+    "WMT","PG","KO","PEP","COST","PM","MO","CL","EL","KMB",
+    # Industrial
+    "GE","CAT","HON","RTX","UPS","BA","LMT","DE","MMM","ETN",
+    # Energía
+    "XOM","CVX","COP","SLB","EOG","MPC","PSX","VLO","OXY","PXD",
+    # Servicios públicos y real estate
+    "NEE","DUK","SO","D","AMT","PLD","EQIX","PSA","SPG","O",
+    # Materiales
+    "LIN","APD","SHW","ECL","NEM","FCX","NUE","VMC","MLM","CF",
+]
+
+
+def obtener_sp500() -> list[str]:
+    """
+    Descarga la lista actual del S&P 500.
+    Fuentes en orden: GitHub CSV → Wikipedia → lista hardcodeada.
+    """
+    # Fuente 1: GitHub CSV (datahub.io)
+    try:
+        df = pd.read_csv(_FUENTES_SP500[0])
+        col = next((c for c in df.columns if "symbol" in c.lower()), None)
+        if col and len(df) > 400:
+            return df[col].str.replace(".", "-", regex=False).tolist()
+    except Exception:
+        pass
+
+    # Fuente 2: Wikipedia
     try:
         tabla = pd.read_html("https://en.wikipedia.org/wiki/List_of_S%26P_500_companies")[0]
-        return tabla["Symbol"].str.replace(".", "-", regex=False).tolist()
+        tickers = tabla["Symbol"].str.replace(".", "-", regex=False).tolist()
+        if len(tickers) > 400:
+            return tickers
     except Exception:
-        # Lista de respaldo con los 50 mayores componentes
-        return [
-            "AAPL","MSFT","NVDA","AMZN","GOOGL","META","BRK-B","LLY","AVGO","JPM",
-            "V","UNH","XOM","TSLA","MA","JNJ","PG","HD","MRK","COST","ABBV","CVX",
-            "CRM","BAC","NFLX","KO","PEP","WMT","TMO","LIN","ABT","ORCL","ACN",
-            "MCD","PM","CSCO","IBM","TXN","NEE","RTX","QCOM","GE","SPGI","HON",
-            "AMAT","CAT","GS","AMGN","ISRG","BKNG",
-        ]
+        pass
+
+    # Fuente 3: lista hardcodeada
+    print("[WARN] No se pudo descargar el S&P 500. Usando lista de respaldo.")
+    return _SP500_FALLBACK
 
 
 def obtener_sp500_completo() -> pd.DataFrame:
-    """Descarga el S&P 500 con metadatos de sector desde Wikipedia."""
+    """
+    Descarga el S&P 500 con metadatos de sector.
+    Fuentes en orden: GitHub CSV → Wikipedia → yfinance (caché 30 días) → sin sector.
+    """
+    # Fuente 1: GitHub CSV
+    try:
+        df = pd.read_csv(_FUENTES_SP500[0])
+        df.columns = [c.lower().strip() for c in df.columns]
+        col_sector = next((c for c in df.columns if "sector" in c), None)
+        col_symbol = next((c for c in df.columns if "symbol" in c), None)
+        col_name   = next((c for c in df.columns if c in ("name", "security", "nombre")), None)
+        if col_symbol and col_sector and len(df) > 400:
+            df[col_symbol] = df[col_symbol].str.replace(".", "-", regex=False)
+            return pd.DataFrame({
+                "ticker":    df[col_symbol],
+                "nombre":    df[col_name] if col_name else df[col_symbol],
+                "sector":    df[col_sector],
+                "subsector": "",
+            })
+    except Exception:
+        pass
+
+    # Fuente 2: Wikipedia
     try:
         tabla = pd.read_html("https://en.wikipedia.org/wiki/List_of_S%26P_500_companies")[0]
         tabla["Symbol"] = tabla["Symbol"].str.replace(".", "-", regex=False)
-        return tabla[["Symbol", "Security", "GICS Sector", "GICS Sub-Industry"]].rename(
-            columns={"Symbol": "ticker", "Security": "nombre",
-                     "GICS Sector": "sector", "GICS Sub-Industry": "subsector"}
-        )
+        if len(tabla) > 400:
+            return tabla[["Symbol", "Security", "GICS Sector", "GICS Sub-Industry"]].rename(
+                columns={"Symbol": "ticker", "Security": "nombre",
+                         "GICS Sector": "sector", "GICS Sub-Industry": "subsector"}
+            )
     except Exception:
-        tickers = obtener_sp500()
-        return pd.DataFrame({
-            "ticker": tickers,
-            "nombre": tickers,
-            "sector": "N/A",
-            "subsector": "N/A",
-        })
+        pass
+
+    # Fuente 3: yfinance
+    tickers = obtener_sp500()
+    return _obtener_sectores_yfinance(tickers)
+
+
+def _obtener_sectores_yfinance(tickers: list[str]) -> pd.DataFrame:
+    """
+    Descarga sector e industria para cada ticker via yfinance.
+    Caché local de 30 días — solo descarga una vez.
+    """
+    ruta = os.path.join(CACHE_DIR, "sectores_yfinance.csv")
+
+    # Cargar caché si existe y está vigente (720h = 30 días)
+    if _cache_vigente(ruta, 720):
+        df_cache = pd.read_csv(ruta)
+        faltantes = [t for t in tickers if t not in df_cache["ticker"].values]
+        if not faltantes:
+            return df_cache[df_cache["ticker"].isin(tickers)].reset_index(drop=True)
+    else:
+        df_cache  = pd.DataFrame()
+        faltantes = tickers
+
+    n = len(faltantes)
+    print(f"[INFO] Descargando sectores via yfinance para {n} tickers (primera vez, se cachea 30 días)...")
+
+    filas = []
+    for i, t in enumerate(faltantes, 1):
+        try:
+            info = yf.Ticker(t).info
+            filas.append({
+                "ticker":    t,
+                "nombre":    info.get("longName", t),
+                "sector":    info.get("sector", "N/A"),
+                "subsector": info.get("industry", "N/A"),
+            })
+        except Exception:
+            filas.append({"ticker": t, "nombre": t, "sector": "N/A", "subsector": "N/A"})
+        if i % 50 == 0:
+            print(f"  {i}/{n} tickers procesados...")
+
+    df_nuevo = pd.DataFrame(filas)
+    if not df_cache.empty:
+        df_nuevo = pd.concat([df_cache, df_nuevo], ignore_index=True).drop_duplicates("ticker")
+    df_nuevo.to_csv(ruta, index=False)
+
+    return df_nuevo[df_nuevo["ticker"].isin(tickers)].reset_index(drop=True)
 
 
 def filtrar_universo_interactivo() -> list[str]:
     """
     Diálogo interactivo para filtrar el universo S&P 500 por sector antes del scan.
-    Permite elegir uno o varios sectores, o saltar el filtro y usar el universo completo.
+    Sectores obtenidos de: GitHub CSV → Wikipedia → yfinance (caché 30 días).
     Devuelve lista de tickers a analizar.
     """
     print("\n" + "=" * 62)
@@ -157,7 +268,12 @@ def filtrar_universo_interactivo() -> list[str]:
     print()
 
     sp500_df = obtener_sp500_completo()
-    sectores = sorted(sp500_df["sector"].dropna().unique())
+    sectores = sorted(s for s in sp500_df["sector"].dropna().unique() if s != "N/A")
+
+    if not sectores:
+        tickers = sp500_df["ticker"].tolist()
+        print(f"  [INFO] Sin datos de sector. Usando universo completo: {len(tickers)} tickers.")
+        return tickers
 
     print("  Sectores disponibles:")
     for i, s in enumerate(sectores, 1):
@@ -166,9 +282,9 @@ def filtrar_universo_interactivo() -> list[str]:
 
     print()
     print("  Opciones de selección:")
-    print("    Números separados por coma  →  ej: 1,3,7")
-    print("    Rango con guión             →  ej: 2-5")
-    print("    ENTER sin texto             →  usar todo el S&P 500")
+    print("    Numeros separados por coma  ->  ej: 1,3,7")
+    print("    Rango con guion             ->  ej: 2-5")
+    print("    ENTER sin texto             ->  usar todo el S&P 500")
     print()
 
     entrada = input("  Tu selección: ").strip()
@@ -237,7 +353,7 @@ def descargar_precios(
             df.to_parquet(ruta)
         return df[sorted(df.columns)]
 
-    print(f"[INFO] Descargando precios para {len(tickers)} tickers ({inicio} → {fin})...")
+    print(f"[INFO] Descargando precios para {len(tickers)} tickers ({inicio} - {fin})...")
     df = _descargar_batch_yfinance(tickers, inicio, fin)
     df.to_parquet(ruta)
     print(f"[OK] Precios guardados en {ruta}")
@@ -248,7 +364,8 @@ def _descargar_batch_yfinance(tickers: list[str], inicio: str, fin: str) -> pd.D
     """Descarga histórico diario en lotes de 100 desde yfinance."""
     batch_size = 100
     frames = []
-    for i in range(0, len(tickers), batch_size):
+    total = len(tickers)
+    for i in range(0, total, batch_size):
         lote = tickers[i : i + batch_size]
         try:
             raw = yf.download(
@@ -266,6 +383,8 @@ def _descargar_batch_yfinance(tickers: list[str], inicio: str, fin: str) -> pd.D
             frames.append(cierre)
         except Exception as e:
             print(f"  [WARN] Error en lote {i}-{i+batch_size}: {e}")
+        print(_barra_progreso(min(i + batch_size, total), total), end="\r", flush=True)
+    print()
     if not frames:
         return pd.DataFrame()
     return pd.concat(frames, axis=1)
@@ -275,7 +394,7 @@ def _descargar_batch_yfinance(tickers: list[str], inicio: str, fin: str) -> pd.D
 
 def descargar_precios_alpaca(
     tickers: list[str],
-    inicio: str = CORTE_IN_SAMPLE,
+    inicio: str = INICIO_DEFAULT,
     fin: str | None = None,
     forzar_descarga: bool = False,
 ) -> pd.DataFrame:
@@ -310,17 +429,19 @@ def descargar_precios_alpaca(
         if not faltantes:
             return df[sorted(df.columns)]
 
-    print(f"[ALPACA] Descargando histórico diario para {len(tickers)} tickers ({inicio} → {fin})...")
+    print(f"[ALPACA] Descargando historico diario para {len(tickers)} tickers ({inicio} - {fin})...")
 
     client  = StockHistoricalDataClient(ALPACA_API_KEY, ALPACA_API_SECRET)
     frames  = []
     # Alpaca tiene límite de símbolos por petición; lotes de 100
     batch_size = 100
-    for i in range(0, len(tickers), batch_size):
+    total = len(tickers)
+    for i in range(0, total, batch_size):
         lote = tickers[i : i + batch_size]
+        lote_alpaca = [t.replace("-", ".") for t in lote]
         try:
             request = StockBarsRequest(
-                symbol_or_symbols=lote,
+                symbol_or_symbols=lote_alpaca,
                 timeframe=TimeFrame(1, TimeFrameUnit.Day),
                 start=inicio,
                 end=fin,
@@ -338,6 +459,8 @@ def descargar_precios_alpaca(
             frames.append(cierre)
         except Exception as e:
             print(f"  [WARN] Error Alpaca lote {i}-{i+batch_size}: {e}")
+        print(_barra_progreso(min(i + batch_size, total), total), end="\r", flush=True)
+    print()
 
     if not frames:
         print("[WARN] Sin datos de Alpaca. Usando yfinance como fallback.")
@@ -384,6 +507,35 @@ def _extraer_ohlcv_alpaca(bars: pd.DataFrame, tickers: list[str]) -> dict[str, p
 
 
 
+def _barra_progreso(actual: int, total: int, ancho: int = 30) -> str:
+    pct     = actual / total
+    llenos  = int(ancho * pct)
+    barra   = "#" * llenos + "-" * (ancho - llenos)
+    return f"  [{barra}] {actual}/{total} tickers ({pct*100:.0f}%)"
+
+
+def _ohlcv_diario_yfinance(tickers: list[str], inicio: str, fin: str) -> dict[str, pd.DataFrame]:
+    """Fallback: descarga OHLCV diario desde yfinance."""
+    resultados: dict[str, list] = {"close": [], "open": [], "volume": []}
+    total = len(tickers)
+    for i in range(0, total, 100):
+        lote = tickers[i : i + 100]
+        try:
+            raw = yf.download(lote, start=inicio, end=fin, auto_adjust=True,
+                              progress=False, threads=True)
+            ohlcv = _extraer_ohlcv_yfinance(raw, lote)
+            for campo in resultados:
+                resultados[campo].append(ohlcv[campo])
+        except Exception as e:
+            print(f"  [WARN] yfinance OHLCV lote {i}: {e}")
+        print(_barra_progreso(min(i + 100, total), total), end="\r", flush=True)
+    print()
+    return {
+        campo: pd.concat(frames, axis=1).sort_index()
+        for campo, frames in resultados.items() if frames
+    }
+
+
 def descargar_ohlcv_horario(
     tickers: list[str],
     dias_atras: int = 730,
@@ -391,22 +543,26 @@ def descargar_ohlcv_horario(
 ) -> dict[str, pd.DataFrame]:
     """
     Descarga barras horarias OHLCV desde Alpaca.
-    Usado para detección de pares y generación de señales.
+    Si Alpaca no está disponible, cae a datos diarios de yfinance.
 
     Returns:
-        {'close': df, 'open': df, 'volume': df}  — índice: timestamps horarios
+        {'close': df, 'open': df, 'volume': df}
     """
     if not _ALPACA_DISPONIBLE:
-        print("[WARN] Alpaca no configurado. Datos horarios no disponibles sin API keys.")
-        return {"close": pd.DataFrame(), "open": pd.DataFrame(), "volume": pd.DataFrame()}
+        print("[WARN] Alpaca no configurado. Usando yfinance diario como fallback.")
+        fin    = datetime.now().strftime("%Y-%m-%d")
+        inicio = (datetime.now() - timedelta(days=dias_atras)).strftime("%Y-%m-%d")
+        return _ohlcv_diario_yfinance(tickers, inicio, fin)
 
     try:
         from alpaca.data.historical import StockHistoricalDataClient
         from alpaca.data.requests import StockBarsRequest
         from alpaca.data.timeframe import TimeFrame, TimeFrameUnit
     except ImportError:
-        print("[WARN] alpaca-py no instalado: pip install alpaca-py")
-        return {"close": pd.DataFrame(), "open": pd.DataFrame(), "volume": pd.DataFrame()}
+        print("[WARN] alpaca-py no instalado. Usando yfinance diario como fallback.")
+        fin    = datetime.now().strftime("%Y-%m-%d")
+        inicio = (datetime.now() - timedelta(days=dias_atras)).strftime("%Y-%m-%d")
+        return _ohlcv_diario_yfinance(tickers, inicio, fin)
 
     nombre_cache = f"ohlcv_horario_{dias_atras}d"
     ruta = _ruta_cache(nombre_cache)
@@ -423,12 +579,14 @@ def descargar_ohlcv_horario(
     client    = StockHistoricalDataClient(ALPACA_API_KEY, ALPACA_API_SECRET)
 
     resultados: dict[str, list] = {"close": [], "open": [], "volume": []}
+    total = len(tickers)
 
-    for i in range(0, len(tickers), 100):
+    for i in range(0, total, 100):
         lote = tickers[i : i + 100]
+        lote_alpaca = [t.replace("-", ".") for t in lote]
         try:
             request = StockBarsRequest(
-                symbol_or_symbols=lote,
+                symbol_or_symbols=lote_alpaca,
                 timeframe=TimeFrame(1, TimeFrameUnit.Hour),
                 start=inicio_dt,
                 end=fin_dt,
@@ -443,9 +601,14 @@ def descargar_ohlcv_horario(
                 resultados[campo].append(ohlcv[campo])
         except Exception as e:
             print(f"  [WARN] Alpaca horario lote {i}: {e}")
+        print(_barra_progreso(min(i + 100, total), total), end="\r", flush=True)
+    print()
 
     if not any(resultados["close"]):
-        return {"close": pd.DataFrame(), "open": pd.DataFrame(), "volume": pd.DataFrame()}
+        print("[WARN] Sin datos de Alpaca. Usando yfinance diario como fallback.")
+        fin    = fin_dt.strftime("%Y-%m-%d")
+        inicio = (fin_dt - timedelta(days=dias_atras)).strftime("%Y-%m-%d")
+        return _ohlcv_diario_yfinance(tickers, inicio, fin)
 
     resultado_final = {
         campo: pd.concat(frames, axis=1).sort_index()
@@ -458,101 +621,6 @@ def descargar_ohlcv_horario(
 
     print(f"[OK] OHLCV horario: {len(resultado_final['close'])} barras | {len(tickers)} tickers")
     return resultado_final
-
-
-def descargar_ohlcv_diario(
-    tickers: list[str],
-    inicio: str = CORTE_IN_SAMPLE,
-    fin: str | None = None,
-    forzar_descarga: bool = False,
-) -> dict[str, pd.DataFrame]:
-    """
-    Descarga barras diarias OHLCV desde Alpaca (2020-hoy).
-    Usado para validación diaria de pares activos.
-
-    Returns:
-        {'close': df, 'open': df, 'volume': df}  — índice: fechas diarias
-    """
-    fin = fin or datetime.now().strftime("%Y-%m-%d")
-
-    if not _ALPACA_DISPONIBLE:
-        print("[WARN] Alpaca no configurado. Usando yfinance como fallback.")
-        return _ohlcv_diario_yfinance(tickers, inicio, fin)
-
-    try:
-        from alpaca.data.historical import StockHistoricalDataClient
-        from alpaca.data.requests import StockBarsRequest
-        from alpaca.data.timeframe import TimeFrame, TimeFrameUnit
-    except ImportError:
-        print("[WARN] alpaca-py no instalado: pip install alpaca-py")
-        return _ohlcv_diario_yfinance(tickers, inicio, fin)
-
-    nombre_cache = f"ohlcv_diario_{inicio[:4]}_{fin[:4]}"
-    ruta_base = _ruta_cache(nombre_cache)
-
-    # OHLCV diario: refresca una vez al día (TTL 24h)
-    if not forzar_descarga and _cache_vigente(ruta_base.replace(".parquet", "_close.parquet"), 24):
-        print(f"[CACHÉ] OHLCV diario desde {ruta_base}")
-        return {c: pd.read_parquet(ruta_base.replace(".parquet", f"_{c}.parquet"))
-                for c in ("close", "open", "volume")}
-
-    client = StockHistoricalDataClient(ALPACA_API_KEY, ALPACA_API_SECRET)
-    resultados: dict[str, list] = {"close": [], "open": [], "volume": []}
-
-    for i in range(0, len(tickers), 100):
-        lote = tickers[i : i + 100]
-        try:
-            request = StockBarsRequest(
-                symbol_or_symbols=lote,
-                timeframe=TimeFrame(1, TimeFrameUnit.Day),
-                start=inicio,
-                end=fin,
-                adjustment="all",
-                feed="iex",
-            )
-            bars = client.get_stock_bars(request).df
-            if bars.empty:
-                continue
-            ohlcv = _extraer_ohlcv_alpaca(bars, lote)
-            for campo in resultados:
-                resultados[campo].append(ohlcv[campo])
-        except Exception as e:
-            print(f"  [WARN] Alpaca diario lote {i}: {e}")
-
-    if not any(resultados["close"]):
-        print("[WARN] Sin datos Alpaca. Usando yfinance.")
-        return _ohlcv_diario_yfinance(tickers, inicio, fin)
-
-    resultado_final = {
-        campo: pd.concat(frames, axis=1).sort_index()
-        for campo, frames in resultados.items()
-        if frames
-    }
-
-    for campo, df in resultado_final.items():
-        df.to_parquet(ruta_base.replace(".parquet", f"_{campo}.parquet"))
-
-    print(f"[OK] OHLCV diario Alpaca: {len(resultado_final['close'])} días | {len(tickers)} tickers")
-    return resultado_final
-
-
-def _ohlcv_diario_yfinance(tickers: list[str], inicio: str, fin: str) -> dict[str, pd.DataFrame]:
-    """Fallback: descarga OHLCV diario desde yfinance."""
-    resultados: dict[str, list] = {"close": [], "open": [], "volume": []}
-    for i in range(0, len(tickers), 100):
-        lote = tickers[i : i + 100]
-        try:
-            raw = yf.download(lote, start=inicio, end=fin, auto_adjust=True,
-                              progress=False, threads=True)
-            ohlcv = _extraer_ohlcv_yfinance(raw, lote)
-            for campo in resultados:
-                resultados[campo].append(ohlcv[campo])
-        except Exception as e:
-            print(f"  [WARN] yfinance OHLCV lote {i}: {e}")
-    return {
-        campo: pd.concat(frames, axis=1).sort_index()
-        for campo, frames in resultados.items() if frames
-    }
 
 
 # ── Limpieza ─────────────────────────────────────────────────────────────────

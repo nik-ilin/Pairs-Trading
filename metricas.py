@@ -17,7 +17,7 @@ Modelos implementados:
 import numpy as np
 import pandas as pd
 
-from config import DIAS_ANIO, HORAS_ANIO
+from config import DIAS_ANIO
 
 
 # ── Rendimiento ───────────────────────────────────────────────────────────────
