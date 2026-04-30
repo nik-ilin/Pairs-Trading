@@ -5,31 +5,32 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## Running the system
 
 ```bash
-# Pipeline completo (primera ejecución recomendada)
+# Primera ejecución: scan semanal + backtest de los 5 mejores pares
 python main.py --modo full
 
-# Detectar pares cointegrados (in-sample 2008-2020)
+# Scan semanal: detectar pares cointegrados con datos horarios de Alpaca (12 meses)
 python main.py --modo scan
 
-# Backtesting de un par específico con gráficos
-python main.py --modo backtest --par AAPL MSFT --optimizar --walk-forward --graficos
+# Pipeline diario (modo por defecto): verificar pares activos + señales del día
+python main.py --modo diario
 
-# Señales del día para los pares validados
-python main.py --modo señales
+# Backtesting de un par específico con grid search, walk-forward y gráficos
+python main.py --modo backtest --par AAPL MSFT --optimizar --walk-forward --graficos
 
 # Informe visual completo de un par
 python main.py --modo evaluar --par KO PEP
 ```
 
-The legacy interactive script still works standalone:
-```bash
-python cointegración.py
-```
-
 ## Dependencies
 
 ```bash
-pip install yfinance pandas numpy matplotlib statsmodels scipy
+pip install alpaca-py yfinance pandas numpy matplotlib statsmodels scipy python-dotenv
+```
+
+Credenciales de Alpaca en `.env` (nunca en el código):
+```
+ALPACA_API_KEY=...
+ALPACA_API_SECRET=...
 ```
 
 ## Architecture
@@ -39,7 +40,7 @@ pip install yfinance pandas numpy matplotlib statsmodels scipy
 ```
 datos.py → deteccion.py → spread.py → backtesting.py → metricas.py
                                     ↓
-                           automatizacion.py (daily)
+                           automatizacion.py (pipelines)
                                     ↓
                            evaluacion.py (charts)
                                     ↓
@@ -50,33 +51,48 @@ datos.py → deteccion.py → spread.py → backtesting.py → metricas.py
 
 | File | Responsibility |
 |---|---|
-| `datos.py` | yfinance download with local Parquet cache; S&P 500 universe; in-sample/out-of-sample split at 2020-01-01 |
-| `deteccion.py` | Engle-Granger pre-filter (fast O(n)) → Johansen validator; exports `pares_cointegrados.csv` |
-| `spread.py` | Kalman Filter for dynamic hedge ratio; Ornstein-Uhlenbeck half-life for adaptive z-score window; entry/exit signal generation; volatility-scaled position sizing |
-| `backtesting.py` | Full backtest engine; walk-forward validation; grid search; Monte Carlo simulation; permutation test for statistical significance |
+| `datos.py` | Alpaca (primary) + yfinance (fallback); smart cache with TTL per data type; S&P 500 universe; market hours guard |
+| `deteccion.py` | Engle-Granger pre-filter → Johansen validator; uses hourly data (12 months); exports `pares_cointegrados.csv` |
+| `spread.py` | Kalman Filter for dynamic hedge ratio (warmup=390 bars); OU half-life in hourly bars; entry/exit signals; volatility-scaled sizing |
+| `backtesting.py` | Full backtest engine (daily data); walk-forward validation; grid search with IS/OOS split; Monte Carlo; permutation test |
 | `metricas.py` | Pure functions: Sharpe, Sortino, Calmar, Omega, MDD, VaR, CVaR, profit factor |
-| `automatizacion.py` | Daily pipeline: ADF stationarity check, Bollinger bands, volatility regime, cointegration break alert, position state via JSON |
-| `evaluacion.py` | 11 presentation-quality dark-theme charts saved to `graficos/` |
-| `main.py` | CLI with `--modo {scan,backtest,evaluar,señales,full}` |
+| `automatizacion.py` | Two pipelines: daily (verify active pairs + signals) and weekly (full scan) |
+| `evaluacion.py` | Presentation-quality dark-theme charts saved to `graficos/` |
+| `main.py` | CLI with `--modo {scan,diario,backtest,evaluar,full}` |
+| `config.py` | All algorithm parameters centralized; API keys via `.env` |
+
+### Data sources by use case
+
+| Use case | Source | Frequency |
+|---|---|---|
+| Pair detection | Alpaca | Hourly — last 12 months |
+| Daily signals | Alpaca | Hourly — last 12 months |
+| Backtesting | Alpaca | Daily — 2020 to present |
+| Fallback (no API keys) | yfinance | Daily |
+
+### Two-pipeline automation
+
+- **Daily pipeline** (run at market open 9:30 EST): verify cointegration of active pairs → generate today's signals
+- **Weekly pipeline** (run on weekends): full scan of all ~125,000 S&P 500 pairs, update `pares_cointegrados.csv`
 
 ### Key mathematical models
 
-- **Kalman Filter** (not static OLS) for hedge ratio — adapts to structural changes over time
-- **OU process half-life** (not fixed window) for z-score normalization — empirically calibrated to the spread's mean-reversion speed
-- **Engle-Granger as pre-filter + Johansen as validator** — reduces scan time ~10× while maintaining statistical rigor
-- **CVaR / Expected Shortfall** instead of VaR alone — captures tail risk more faithfully
-- **Walk-forward validation** (not single backtest) — detects strategy degradation over time
+- **Kalman Filter** (not static OLS) for hedge ratio — adapts to structural changes; warmup = 390 bars (= 60 trading days at hourly frequency)
+- **OU process half-life in bars** (not days) for z-score window — clamped to [32.5, 1638] hourly bars
+- **Engle-Granger as pre-filter + Johansen as validator** — EG takes ~0.001s/pair, full scan ~3 min
+- **CVaR / Expected Shortfall** instead of VaR alone
+- **Walk-forward validation** — IS/OOS grid search split at 70%/30%
 
 ### In-sample / out-of-sample split
 
-- **In-sample 2008–2020**: cointegration detection only. Never used for backtesting.
-- **Out-of-sample 2020–2026**: all backtesting and performance metrics. Prevents data snooping.
+- **Detection**: hourly data, last 12 months (current cointegration, not historical)
+- **Backtesting**: Alpaca daily data from 2020-01-01 to present (out-of-sample only)
 
 ### Generated outputs
 
 - `cache/` — Parquet price files (auto-created)
-- `graficos/` — 11 PNG charts per pair (auto-created)
-- `pares_cointegrados.csv` — validated pairs from scan
+- `graficos/` — PNG charts per pair (auto-created)
+- `pares_cointegrados.csv` — validated pairs from weekly scan
 - `señales_diarias.csv` — today's trading signals
 - `estado_posiciones.json` — open positions state
 
@@ -84,3 +100,5 @@ datos.py → deteccion.py → spread.py → backtesting.py → metricas.py
 
 - All comments and print messages written in **Spanish**
 - SMART objective targets: Sharpe > 1.0, Max Drawdown < 15%
+- No `bfill()` anywhere — only `ffill()` to prevent look-ahead bias
+- Liquidity filter: minimum 500,000 average daily volume

@@ -10,29 +10,37 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-# ── Alpaca — datos intradiarios ───────────────────────────────────────────────
+# ── Mercado ───────────────────────────────────────────────────────────────────
+MERCADO_ZONA_HORARIA = "America/New_York"
+MERCADO_APERTURA     = (9, 30)    # hora, minuto
+MERCADO_CIERRE       = (16, 0)
+
+# ── Alpaca ────────────────────────────────────────────────────────────────────
 ALPACA_API_KEY    = os.getenv("ALPACA_API_KEY", "")
 ALPACA_API_SECRET = os.getenv("ALPACA_API_SECRET", "")
-ALPACA_INTERVALO  = "1Hour"   # opciones: 1Min, 5Min, 15Min, 30Min, 1Hour
 
 # ── Procesamiento de datos ────────────────────────────────────────────────────
 MIN_VOLUMEN_DIARIO  = 500_000   # volumen medio diario mínimo para considerar un ticker líquido
-OUTLIER_RETORNO_MAX = 0.50      # retorno diario absoluto máximo antes de tratar como error de datos (50%)
 
 # ── Datos históricos ──────────────────────────────────────────────────────────
-INICIO_DEFAULT    = "2008-01-01"
+INICIO_DEFAULT    = "2020-01-01"   # inicio del histórico Alpaca (out-of-sample)
 FIN_DEFAULT       = "2026-01-01"
-CORTE_IN_SAMPLE   = "2020-01-01"   # antes: in-sample (detección); después: out-of-sample (backtest)
 MIN_OBS           = 1260           # ~5 años de datos diarios mínimos por ticker
 
 # ── Calendario ────────────────────────────────────────────────────────────────
 DIAS_ANIO         = 252            # días de negociación por año
+HORAS_ANIO        = 1638           # horas de negociación por año (252 × 6.5h)
+HORAS_DIA         = 6.5            # horas de mercado abierto por día (9:30-16:00 NY)
+
+# ── Observaciones mínimas por frecuencia ─────────────────────────────────────
+MIN_OBS           = 1260           # ~5 años de datos diarios
+MIN_OBS_HORARIO   = 1638           # ~1 año de datos horarios (252 × 6.5h)
 
 # ── Detección de pares (deteccion.py) ────────────────────────────────────────
-UMBRAL_EG         = 0.05           # p-value máximo para pasar el pre-filtro Engle-Granger
-MIN_SCORE_JOHANSEN = 1.0           # score mínimo de Johansen (traza / valor crítico)
-VENTANA_ROLLING   = 252            # días para evaluar estabilidad temporal del par
-VENTANA_COINT_ACTIVA = 126         # días recientes para verificar cointegración activa (~6 meses)
+UMBRAL_EG            = 0.05        # p-value máximo para pasar el pre-filtro Engle-Granger
+MIN_SCORE_JOHANSEN   = 1.0         # score mínimo de Johansen (traza / valor crítico)
+VENTANA_ROLLING      = 819         # barras para ventana rolling (6 meses horario = 1638//2)
+VENTANA_COINT_ACTIVA = 252         # barras diarias recientes para verificar cointegración activa
 
 # ── Filtro de Kalman (spread.py) ──────────────────────────────────────────────
 KALMAN_DELTA      = 1e-4           # velocidad de adaptación del estado (mayor = más reactivo)

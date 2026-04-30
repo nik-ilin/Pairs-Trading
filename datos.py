@@ -2,11 +2,10 @@
 datos.py — Capa de descarga y caché de precios históricos.
 
 Fuentes de datos:
-  - yfinance  → histórico diario 2008-2020 (in-sample, detección de pares)
-  - Alpaca    → histórico diario 2020-hoy  (out-of-sample, backtest y señales)
-  - Alpaca    → intradiario 1Min-1Hour     (señales en tiempo real)
+  - Alpaca horario  → últimos 12 meses, detección de pares y señales
+  - Alpaca diario   → 2020-hoy, backtesting out-of-sample
+  - yfinance diario → fallback cuando Alpaca no está disponible
 
-Usar descargar_precios_combinado() como punto de entrada principal.
 Las credenciales de Alpaca van en .env (ALPACA_API_KEY, ALPACA_API_SECRET).
 """
 
@@ -15,14 +14,17 @@ import pandas as pd
 import yfinance as yf
 import warnings
 from datetime import datetime, timedelta
+from zoneinfo import ZoneInfo
 
 warnings.filterwarnings("ignore")
 
 # ── Cargar variables de entorno desde .env ───────────────────────────────────
 
 from config import (
-    ALPACA_API_KEY, ALPACA_API_SECRET, ALPACA_INTERVALO,
-    INICIO_DEFAULT, FIN_DEFAULT, MIN_OBS, CORTE_IN_SAMPLE,
+    ALPACA_API_KEY, ALPACA_API_SECRET,
+    INICIO_DEFAULT, FIN_DEFAULT, MIN_OBS,
+    CORTE_IN_SAMPLE, MIN_VOLUMEN_DIARIO,
+    MERCADO_ZONA_HORARIA, MERCADO_APERTURA, MERCADO_CIERRE,
 )
 
 # True si las credenciales de Alpaca están configuradas
@@ -31,6 +33,77 @@ _ALPACA_DISPONIBLE = bool(ALPACA_API_KEY and ALPACA_API_KEY != "tu_api_key_aqui"
 # ── Directorio de caché ──────────────────────────────────────────────────────
 CACHE_DIR = os.path.join(os.path.dirname(__file__), "cache")
 os.makedirs(CACHE_DIR, exist_ok=True)
+
+
+# ── Horario de mercado ────────────────────────────────────────────────────────
+
+def mercado_abierto() -> bool:
+    """Devuelve True si el mercado americano (NYSE) está abierto ahora mismo."""
+    ny = datetime.now(ZoneInfo(MERCADO_ZONA_HORARIA))
+    if ny.weekday() >= 5:  # sábado=5, domingo=6
+        return False
+    apertura = ny.replace(hour=MERCADO_APERTURA[0], minute=MERCADO_APERTURA[1],
+                          second=0, microsecond=0)
+    cierre   = ny.replace(hour=MERCADO_CIERRE[0],   minute=MERCADO_CIERRE[1],
+                          second=0, microsecond=0)
+    return apertura <= ny <= cierre
+
+
+def tiempo_hasta_apertura() -> timedelta | None:
+    """
+    Devuelve el tiempo que falta para la próxima apertura del mercado.
+    Devuelve None si el mercado está abierto ahora mismo.
+    """
+    if mercado_abierto():
+        return None
+    ny  = datetime.now(ZoneInfo(MERCADO_ZONA_HORARIA))
+    hoy = ny.replace(hour=MERCADO_APERTURA[0], minute=MERCADO_APERTURA[1],
+                     second=0, microsecond=0)
+    if ny >= hoy:
+        # Ya pasó la apertura de hoy → siguiente día laborable
+        dias_extra = 1
+        if ny.weekday() == 4:  # viernes → lunes
+            dias_extra = 3
+        elif ny.weekday() == 5:  # sábado → lunes
+            dias_extra = 2
+        hoy += timedelta(days=dias_extra)
+    return hoy - ny
+
+
+def verificar_horario_mercado(modo: str = "señales") -> bool:
+    """
+    Comprueba si tiene sentido ejecutar el sistema ahora mismo.
+
+    - modo='señales'   : solo durante horario de mercado
+    - modo='validacion': siempre (puede ejecutarse al cierre)
+    - modo='deteccion' : siempre (análisis offline)
+    """
+    if modo == "señales" and not mercado_abierto():
+        espera = tiempo_hasta_apertura()
+        horas  = int(espera.total_seconds() // 3600)
+        mins   = int((espera.total_seconds() % 3600) // 60)
+        print(f"[INFO] Mercado cerrado. Próxima apertura en {horas}h {mins}min.")
+        return False
+    return True
+
+
+# ── Caché inteligente ─────────────────────────────────────────────────────────
+
+def _cache_vigente(ruta: str, max_horas: float) -> bool:
+    """
+    Devuelve True si el archivo de caché existe y es más reciente que max_horas.
+
+    TTL por tipo de dato:
+      - yfinance histórico  : float('inf')  — nunca refresca (periodo cerrado)
+      - Alpaca diario       : 24h           — refresca una vez al día
+      - Alpaca horario      : 1h            — refresca cada hora
+    """
+    if not os.path.exists(ruta):
+        return False
+    edad_horas = (datetime.now() - datetime.fromtimestamp(
+        os.path.getmtime(ruta)
+    )).total_seconds() / 3600
+    return edad_horas < max_horas
 
 
 # ── Universo de activos ──────────────────────────────────────────────────────
@@ -131,15 +204,6 @@ def filtrar_universo_interactivo() -> list[str]:
     return tickers
 
 
-def obtener_tickers_url():
-    """Descarga tickers ampliados desde GitHub (fallback al S&P 500)."""
-    url = "https://raw.githubusercontent.com/rreichel3/US-Stock-Symbols/main/all/all_tickers.txt"
-    try:
-        tickers = pd.read_csv(url, header=None)[0].tolist()
-        return [t for t in tickers if isinstance(t, str) and 1 <= len(t) <= 5]
-    except Exception:
-        return obtener_sp500()
-
 
 # ── Descarga y caché ─────────────────────────────────────────────────────────
 
@@ -161,8 +225,9 @@ def descargar_precios(
     nombre_cache = f"precios_{inicio[:4]}_{fin[:4]}"
     ruta = _ruta_cache(nombre_cache)
 
-    if not forzar_descarga and os.path.exists(ruta):
-        print(f"[CACHÉ] Cargando precios desde {ruta}")
+    # yfinance histórico: caché permanente (periodo 2008-2020 no cambia)
+    if not forzar_descarga and _cache_vigente(ruta, float("inf")):
+        print(f"[CACHÉ] Cargando precios históricos desde {ruta}")
         df = pd.read_parquet(ruta)
         faltantes = [t for t in tickers if t not in df.columns]
         if faltantes:
@@ -237,8 +302,9 @@ def descargar_precios_alpaca(
     nombre_cache = f"alpaca_diario_{inicio[:4]}_{fin[:4]}"
     ruta = _ruta_cache(nombre_cache)
 
-    if not forzar_descarga and os.path.exists(ruta):
-        print(f"[CACHÉ] Cargando histórico Alpaca desde {ruta}")
+    # Alpaca diario: refresca una vez al día (TTL 24h)
+    if not forzar_descarga and _cache_vigente(ruta, 24):
+        print(f"[CACHÉ] Cargando histórico Alpaca diario desde {ruta}")
         df = pd.read_parquet(ruta)
         faltantes = [t for t in tickers if t not in df.columns]
         if not faltantes:
@@ -283,212 +349,248 @@ def descargar_precios_alpaca(
     return df
 
 
-def descargar_precios_combinado(
-    tickers: list[str],
-    forzar_descarga: bool = False,
-) -> pd.DataFrame:
-    """
-    Combina yfinance (2008-2020) y Alpaca (2020-hoy) en un único DataFrame diario.
 
-    Este es el punto de entrada principal para obtener el histórico completo:
-      - In-sample  (2008-2020): yfinance — histórico largo y fiable
-      - Out-of-sample (2020-hoy): Alpaca — datos recientes consistentes con señales en vivo
+
+# ── OHLCV — descarga completa (close + open + volume) ────────────────────────
+
+def _extraer_ohlcv_yfinance(raw: pd.DataFrame, tickers: list[str]) -> dict[str, pd.DataFrame]:
+    """Extrae close, open y volume de un DataFrame MultiIndex de yfinance."""
+    if isinstance(raw.columns, pd.MultiIndex):
+        close  = raw["Close"]
+        open_  = raw["Open"]
+        volume = raw["Volume"]
+    else:
+        t = tickers[0]
+        close  = raw[["Close"]].rename(columns={"Close": t})
+        open_  = raw[["Open"]].rename(columns={"Open": t})
+        volume = raw[["Volume"]].rename(columns={"Volume": t})
+    return {"close": close, "open": open_, "volume": volume}
+
+
+def _extraer_ohlcv_alpaca(bars: pd.DataFrame, tickers: list[str]) -> dict[str, pd.DataFrame]:
+    """Extrae close, open y volume de un DataFrame de Alpaca con MultiIndex."""
+    if isinstance(bars.index, pd.MultiIndex):
+        close  = bars["close"].unstack(level=0)
+        open_  = bars["open"].unstack(level=0)
+        volume = bars["volume"].unstack(level=0)
+    else:
+        t = tickers[0]
+        close  = bars[["close"]].rename(columns={"close": t})
+        open_  = bars[["open"]].rename(columns={"open": t})
+        volume = bars[["volume"]].rename(columns={"volume": t})
+    for df in (close, open_, volume):
+        df.index = pd.to_datetime(df.index).tz_localize(None)
+    return {"close": close, "open": open_, "volume": volume}
+
+
+
+def descargar_ohlcv_horario(
+    tickers: list[str],
+    dias_atras: int = 730,
+    forzar_descarga: bool = False,
+) -> dict[str, pd.DataFrame]:
+    """
+    Descarga barras horarias OHLCV desde Alpaca.
+    Usado para detección de pares y generación de señales.
 
     Returns:
-        DataFrame con precios de cierre ajustados (filas=fechas, columnas=tickers).
+        {'close': df, 'open': df, 'volume': df}  — índice: timestamps horarios
     """
-    print("[INFO] Descargando histórico combinado yfinance + Alpaca...")
-
-    # Tramo in-sample: yfinance 2008 → corte
-    df_yf = descargar_precios(
-        tickers,
-        inicio=INICIO_DEFAULT,
-        fin=CORTE_IN_SAMPLE,
-        forzar_descarga=forzar_descarga,
-    )
-
-    # Tramo out-of-sample: Alpaca corte → hoy
-    df_alp = descargar_precios_alpaca(
-        tickers,
-        inicio=CORTE_IN_SAMPLE,
-        forzar_descarga=forzar_descarga,
-    )
-
-    # Unir verticalmente eliminando solapamientos
-    df_yf  = df_yf[df_yf.index  < CORTE_IN_SAMPLE]
-    df_alp = df_alp[df_alp.index >= CORTE_IN_SAMPLE]
-
-    df = pd.concat([df_yf, df_alp]).sort_index()
-
-    # Alinear columnas: solo tickers presentes en ambos tramos
-    tickers_comunes = [t for t in tickers if t in df.columns]
-    df = df[sorted(tickers_comunes)]
-
-    print(f"[OK] Histórico combinado: {df.index[0].date()} → {df.index[-1].date()} "
-          f"| {len(df)} días | {len(df.columns)} tickers")
-    return df
-
-
-# ── Alpaca — datos intradiarios ───────────────────────────────────────────────
-
-def descargar_precios_intradiarios(
-    tickers: list[str],
-    intervalo: str | None = None,
-    dias_atras: int = 5,
-    forzar_descarga: bool = False,
-) -> pd.DataFrame:
-    """
-    Descarga precios intradiarios desde Alpaca.
-
-    Requiere ALPACA_API_KEY y ALPACA_API_SECRET en .env.
-    Si Alpaca no está configurado, cae de vuelta a yfinance con el intervalo más cercano.
-
-    Args:
-        tickers:          Lista de tickers del S&P 500.
-        intervalo:        '1Min', '5Min', '15Min', '30Min', '1Hour'. Por defecto el del .env.
-        dias_atras:       Cuántos días de histórico intradiario descargar.
-        forzar_descarga:  Ignora caché y vuelve a descargar.
-
-    Returns:
-        DataFrame con precios de cierre (filas=timestamps, columnas=tickers).
-    """
-    intervalo = intervalo or ALPACA_INTERVALO
-
     if not _ALPACA_DISPONIBLE:
-        print("[WARN] Alpaca no configurado. Usando yfinance como fallback.")
-        return _intradiario_yfinance_fallback(tickers, intervalo, dias_atras)
+        print("[WARN] Alpaca no configurado. Datos horarios no disponibles sin API keys.")
+        return {"close": pd.DataFrame(), "open": pd.DataFrame(), "volume": pd.DataFrame()}
 
     try:
         from alpaca.data.historical import StockHistoricalDataClient
         from alpaca.data.requests import StockBarsRequest
         from alpaca.data.timeframe import TimeFrame, TimeFrameUnit
     except ImportError:
-        print("[WARN] alpaca-trade-api no instalado. Ejecuta: pip install alpaca-py")
-        print("[WARN] Usando yfinance como fallback.")
-        return _intradiario_yfinance_fallback(tickers, intervalo, dias_atras)
+        print("[WARN] alpaca-py no instalado: pip install alpaca-py")
+        return {"close": pd.DataFrame(), "open": pd.DataFrame(), "volume": pd.DataFrame()}
 
-    _MAP_TIMEFRAME = {
-        "1Min":  TimeFrame(1,  TimeFrameUnit.Minute),
-        "5Min":  TimeFrame(5,  TimeFrameUnit.Minute),
-        "15Min": TimeFrame(15, TimeFrameUnit.Minute),
-        "30Min": TimeFrame(30, TimeFrameUnit.Minute),
-        "1Hour": TimeFrame(1,  TimeFrameUnit.Hour),
-    }
-    if intervalo not in _MAP_TIMEFRAME:
-        raise ValueError(f"Intervalo '{intervalo}' no válido. Opciones: {list(_MAP_TIMEFRAME)}")
-
-    nombre_cache = f"intradiario_{intervalo}_{dias_atras}d"
+    nombre_cache = f"ohlcv_horario_{dias_atras}d"
     ruta = _ruta_cache(nombre_cache)
 
-    if not forzar_descarga and os.path.exists(ruta):
-        ts_cache = datetime.fromtimestamp(os.path.getmtime(ruta))
-        # Reusar caché si tiene menos de 1 hora
-        if datetime.now() - ts_cache < timedelta(hours=1):
-            print(f"[CACHÉ] Datos intradiarios recientes ({intervalo}) desde {ruta}")
-            return pd.read_parquet(ruta)
+    # OHLCV horario: refresca cada hora solo si el mercado está abierto
+    ruta_close = ruta.replace(".parquet", "_close.parquet")
+    if not forzar_descarga and _cache_vigente(ruta_close, 1 if mercado_abierto() else float("inf")):
+        print(f"[CACHÉ] OHLCV horario desde {ruta}")
+        return {c: pd.read_parquet(ruta.replace(".parquet", f"_{c}.parquet"))
+                for c in ("close", "open", "volume")}
 
     fin_dt    = datetime.now()
     inicio_dt = fin_dt - timedelta(days=dias_atras)
+    client    = StockHistoricalDataClient(ALPACA_API_KEY, ALPACA_API_SECRET)
 
-    print(f"[ALPACA] Descargando datos {intervalo} para {len(tickers)} tickers...")
+    resultados: dict[str, list] = {"close": [], "open": [], "volume": []}
 
-    client = StockHistoricalDataClient(ALPACA_API_KEY, ALPACA_API_SECRET)
-    request = StockBarsRequest(
-        symbol_or_symbols=tickers,
-        timeframe=_MAP_TIMEFRAME[intervalo],
-        start=inicio_dt,
-        end=fin_dt,
-        feed="iex",  # feed gratuito (IEX); cambiar a "sip" con plan de pago
-    )
+    for i in range(0, len(tickers), 100):
+        lote = tickers[i : i + 100]
+        try:
+            request = StockBarsRequest(
+                symbol_or_symbols=lote,
+                timeframe=TimeFrame(1, TimeFrameUnit.Hour),
+                start=inicio_dt,
+                end=fin_dt,
+                adjustment="all",
+                feed="iex",
+            )
+            bars = client.get_stock_bars(request).df
+            if bars.empty:
+                continue
+            ohlcv = _extraer_ohlcv_alpaca(bars, lote)
+            for campo in resultados:
+                resultados[campo].append(ohlcv[campo])
+        except Exception as e:
+            print(f"  [WARN] Alpaca horario lote {i}: {e}")
+
+    if not any(resultados["close"]):
+        return {"close": pd.DataFrame(), "open": pd.DataFrame(), "volume": pd.DataFrame()}
+
+    resultado_final = {
+        campo: pd.concat(frames, axis=1).sort_index()
+        for campo, frames in resultados.items()
+        if frames
+    }
+
+    for campo, df in resultado_final.items():
+        df.to_parquet(ruta.replace(".parquet", f"_{campo}.parquet"))
+
+    print(f"[OK] OHLCV horario: {len(resultado_final['close'])} barras | {len(tickers)} tickers")
+    return resultado_final
+
+
+def descargar_ohlcv_diario(
+    tickers: list[str],
+    inicio: str = CORTE_IN_SAMPLE,
+    fin: str | None = None,
+    forzar_descarga: bool = False,
+) -> dict[str, pd.DataFrame]:
+    """
+    Descarga barras diarias OHLCV desde Alpaca (2020-hoy).
+    Usado para validación diaria de pares activos.
+
+    Returns:
+        {'close': df, 'open': df, 'volume': df}  — índice: fechas diarias
+    """
+    fin = fin or datetime.now().strftime("%Y-%m-%d")
+
+    if not _ALPACA_DISPONIBLE:
+        print("[WARN] Alpaca no configurado. Usando yfinance como fallback.")
+        return _ohlcv_diario_yfinance(tickers, inicio, fin)
 
     try:
-        bars = client.get_stock_bars(request).df
-    except Exception as e:
-        print(f"[ERROR] Alpaca: {e}")
-        print("[WARN] Usando yfinance como fallback.")
-        return _intradiario_yfinance_fallback(tickers, intervalo, dias_atras)
+        from alpaca.data.historical import StockHistoricalDataClient
+        from alpaca.data.requests import StockBarsRequest
+        from alpaca.data.timeframe import TimeFrame, TimeFrameUnit
+    except ImportError:
+        print("[WARN] alpaca-py no instalado: pip install alpaca-py")
+        return _ohlcv_diario_yfinance(tickers, inicio, fin)
 
-    # Alpaca devuelve MultiIndex (symbol, timestamp) → pivotar a columnas por ticker
-    if isinstance(bars.index, pd.MultiIndex):
-        df = bars["close"].unstack(level=0)
-    else:
-        df = bars[["close"]].rename(columns={"close": tickers[0]})
+    nombre_cache = f"ohlcv_diario_{inicio[:4]}_{fin[:4]}"
+    ruta_base = _ruta_cache(nombre_cache)
 
-    df.index = pd.to_datetime(df.index, utc=True).tz_convert("America/New_York")
-    df = df.sort_index()
-    df.to_parquet(ruta)
-    print(f"[OK] {len(df)} velas {intervalo} guardadas en {ruta}")
-    return df
+    # OHLCV diario: refresca una vez al día (TTL 24h)
+    if not forzar_descarga and _cache_vigente(ruta_base.replace(".parquet", "_close.parquet"), 24):
+        print(f"[CACHÉ] OHLCV diario desde {ruta_base}")
+        return {c: pd.read_parquet(ruta_base.replace(".parquet", f"_{c}.parquet"))
+                for c in ("close", "open", "volume")}
 
+    client = StockHistoricalDataClient(ALPACA_API_KEY, ALPACA_API_SECRET)
+    resultados: dict[str, list] = {"close": [], "open": [], "volume": []}
 
-def _intradiario_yfinance_fallback(
-    tickers: list[str], intervalo: str, dias_atras: int
-) -> pd.DataFrame:
-    """Fallback a yfinance cuando Alpaca no está disponible."""
-    _MAP_YF = {
-        "1Min":  ("1m",  7),
-        "5Min":  ("5m",  60),
-        "15Min": ("15m", 60),
-        "30Min": ("30m", 60),
-        "1Hour": ("1h",  730),
-    }
-    yf_intervalo, max_dias = _MAP_YF.get(intervalo, ("1h", 730))
-    dias = min(dias_atras, max_dias)
-    fin_dt    = datetime.now()
-    inicio_dt = fin_dt - timedelta(days=dias)
-
-    frames = []
-    for ticker in tickers:
+    for i in range(0, len(tickers), 100):
+        lote = tickers[i : i + 100]
         try:
-            raw = yf.download(
-                ticker,
-                start=inicio_dt.strftime("%Y-%m-%d"),
-                end=fin_dt.strftime("%Y-%m-%d"),
-                interval=yf_intervalo,
-                auto_adjust=True,
-                progress=False,
+            request = StockBarsRequest(
+                symbol_or_symbols=lote,
+                timeframe=TimeFrame(1, TimeFrameUnit.Day),
+                start=inicio,
+                end=fin,
+                adjustment="all",
+                feed="iex",
             )
-            if not raw.empty:
-                frames.append(raw["Close"].rename(ticker))
+            bars = client.get_stock_bars(request).df
+            if bars.empty:
+                continue
+            ohlcv = _extraer_ohlcv_alpaca(bars, lote)
+            for campo in resultados:
+                resultados[campo].append(ohlcv[campo])
         except Exception as e:
-            print(f"  [WARN] yfinance fallback error en {ticker}: {e}")
+            print(f"  [WARN] Alpaca diario lote {i}: {e}")
 
-    if not frames:
-        return pd.DataFrame()
-    return pd.concat(frames, axis=1)
+    if not any(resultados["close"]):
+        print("[WARN] Sin datos Alpaca. Usando yfinance.")
+        return _ohlcv_diario_yfinance(tickers, inicio, fin)
+
+    resultado_final = {
+        campo: pd.concat(frames, axis=1).sort_index()
+        for campo, frames in resultados.items()
+        if frames
+    }
+
+    for campo, df in resultado_final.items():
+        df.to_parquet(ruta_base.replace(".parquet", f"_{campo}.parquet"))
+
+    print(f"[OK] OHLCV diario Alpaca: {len(resultado_final['close'])} días | {len(tickers)} tickers")
+    return resultado_final
+
+
+def _ohlcv_diario_yfinance(tickers: list[str], inicio: str, fin: str) -> dict[str, pd.DataFrame]:
+    """Fallback: descarga OHLCV diario desde yfinance."""
+    resultados: dict[str, list] = {"close": [], "open": [], "volume": []}
+    for i in range(0, len(tickers), 100):
+        lote = tickers[i : i + 100]
+        try:
+            raw = yf.download(lote, start=inicio, end=fin, auto_adjust=True,
+                              progress=False, threads=True)
+            ohlcv = _extraer_ohlcv_yfinance(raw, lote)
+            for campo in resultados:
+                resultados[campo].append(ohlcv[campo])
+        except Exception as e:
+            print(f"  [WARN] yfinance OHLCV lote {i}: {e}")
+    return {
+        campo: pd.concat(frames, axis=1).sort_index()
+        for campo, frames in resultados.items() if frames
+    }
 
 
 # ── Limpieza ─────────────────────────────────────────────────────────────────
 
-def filtrar_datos(df: pd.DataFrame, min_obs: int = MIN_OBS) -> pd.DataFrame:
-    """Elimina tickers con datos insuficientes y rellena huecos menores."""
-    # Eliminar columnas con demasiados NaN
-    df = df.dropna(axis=1, thresh=min_obs)
-    # Solo forward-fill: propagar último precio conocido hacia adelante.
-    # bfill está prohibido — usaría precios futuros para rellenar el pasado (look-ahead bias).
+def filtrar_datos(
+    df_close: pd.DataFrame,
+    df_volume: pd.DataFrame | None = None,
+    min_obs: int = MIN_OBS,
+    min_vol: float = MIN_VOLUMEN_DIARIO,
+) -> pd.DataFrame:
+    """
+    Limpia y filtra el DataFrame de precios de cierre.
+
+    Pasos:
+      1. Elimina tickers con observaciones insuficientes
+      2. Elimina tickers con volumen medio insuficiente (si se pasa df_volume)
+      3. Forward-fill para huecos de festivos y fines de semana
+
+    Nota: no se filtran outliers de precio — un movimiento extremo puede ser
+    real (OPA, earnings, crisis) y eliminarlos introduciría sesgo.
+    """
+    # 1. Mínimo de observaciones
+    df = df_close.dropna(axis=1, thresh=min_obs)
+
+    # 2. Filtro de liquidez
+    if df_volume is not None:
+        vol_comun = [t for t in df.columns if t in df_volume.columns]
+        vol_medio = df_volume[vol_comun].mean()
+        tickers_liquidos = vol_medio[vol_medio >= min_vol].index.tolist()
+        eliminados = len(df.columns) - len(tickers_liquidos)
+        if eliminados > 0:
+            print(f"[INFO] Tickers eliminados por baja liquidez: {eliminados}")
+        df = df[tickers_liquidos]
+
+    # 3. Forward-fill para huecos de festivos y fines de semana (nunca bfill)
     df = df.ffill()
+
+    print(f"[OK] filtrar_datos: {len(df.columns)} tickers válidos | {len(df)} barras")
     return df
 
 
-def preparar_par(df: pd.DataFrame, t1: str, t2: str) -> pd.DataFrame | None:
-    """Extrae y limpia el par (t1, t2); devuelve None si no hay suficientes datos."""
-    if t1 not in df.columns or t2 not in df.columns:
-        return None
-    par = df[[t1, t2]].dropna()
-    if len(par) < MIN_OBS:
-        return None
-    return par
-
-
-def dividir_muestra(
-    df: pd.DataFrame,
-    corte: str = CORTE_IN_SAMPLE,
-) -> tuple[pd.DataFrame, pd.DataFrame]:
-    """
-    Divide en in-sample (detección de pares) y out-of-sample (backtesting).
-    Por defecto: 2008-2020 in-sample (yfinance) | 2020-hoy out-of-sample (Alpaca).
-    El corte se configura en config.py → CORTE_IN_SAMPLE.
-    """
-    in_sample  = df[df.index < corte]
-    out_sample = df[df.index >= corte]
-    return in_sample, out_sample

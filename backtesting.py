@@ -1,19 +1,19 @@
 """
-backtesting.py — Motor de backtesting parametrizable (SMART Objetivo 2).
+backtesting.py — Motor de backtesting parametrizable.
 
-Cubre el periodo 2008–2026 con separación in-sample / out-of-sample.
+Usa datos diarios de Alpaca (2020-presente, out-of-sample).
 Implementa walk-forward validation para evitar overfitting.
 
-Modelos estadísticos y cuantitativos incluidos:
+Modelos incluidos:
   - Walk-Forward Validation : ventanas deslizantes de detección + operación
-  - Grid Search de parámetros: optimiza umbral de entrada/salida y ventana OU
+  - Grid Search de parámetros: optimiza en in-sample, evalúa en out-of-sample
   - Monte Carlo Simulation   : distribución de posibles resultados futuros
   - Bootstrap Sharpe         : intervalo de confianza del Sharpe Ratio
   - Test de permutaciones    : valida que los retornos no son fruto del azar
 """
 
 import warnings
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 import numpy as np
 import pandas as pd
@@ -30,25 +30,34 @@ from metricas import (
     sharpe_ratio, sortino_ratio, calmar_ratio, max_drawdown,
     cagr, win_rate, profit_factor, var_historico, cvar, reporte_completo,
 )
+from config import (
+    DIAS_ANIO,
+    ENTRADA_Z, SALIDA_Z, STOP_Z,
+    CAPITAL_INICIAL, FRACCION_RIESGO, SLIPPAGE, COMISION, USAR_LOG,
+    MC_N_SIMULACIONES, MC_HORIZONTE_DIAS, MC_SEMILLA,
+    BS_N_BOOTSTRAP, BS_NIVEL_CONFIANZA,
+    PERM_N, PERM_SEMILLA,
+    WF_ANOS_DETECCION, WF_ANOS_OPERACION,
+    GRID_ENTRADA_Z, GRID_SALIDA_Z, GRID_WINDOW,
+    MIN_OBS,
+)
 
 warnings.filterwarnings("ignore")
-
-DIAS_ANIO = 252
 
 
 # ── Parámetros del backtest ───────────────────────────────────────────────────
 
 @dataclass
 class ParametrosBacktest:
-    entrada_z:      float = 2.0    # umbral de z-score para abrir posición
-    salida_z:       float = 0.5    # umbral de z-score para cerrar posición
-    stop_z:         float = 3.5    # stop-loss en z-score
-    window_zscore:  int | None = None  # None = usar half-life OU automático
-    capital:        float = 100_000.0
-    fraccion_riesgo: float = 0.10  # fracción del capital por trade
-    slippage:       float = 0.0005 # 0.05% por operación por pata
-    comision:       float = 0.001  # 0.10% por operación por pata
-    usar_log:       bool  = True
+    entrada_z:       float    = ENTRADA_Z
+    salida_z:        float    = SALIDA_Z
+    stop_z:          float    = STOP_Z
+    window_zscore:   int|None = None      # None = half-life OU automático
+    capital:         float    = CAPITAL_INICIAL
+    fraccion_riesgo: float    = FRACCION_RIESGO
+    slippage:        float    = SLIPPAGE
+    comision:        float    = COMISION
+    usar_log:        bool     = USAR_LOG
 
 
 # ── Motor principal ───────────────────────────────────────────────────────────
@@ -109,6 +118,10 @@ class MotorBacktest:
         precios_t1 = self.precios[self.t1]
         precios_t2 = self.precios[self.t2]
 
+        # Precalculado fuera del bucle — evita recomputar O(n) en cada iteración
+        ret_t1_serie = precios_t1.pct_change()
+        ret_t2_serie = precios_t2.pct_change()
+
         for i in range(len(self.precios)):
             fecha  = self.precios.index[i]
             señal  = señales.iloc[i]
@@ -117,15 +130,12 @@ class MotorBacktest:
             b      = beta.iloc[i]
 
             if posicion_actual != 0:
-                # Retorno diario de la posición abierta
-                ret_t1 = precios_t1.pct_change().iloc[i]
-                ret_t2 = precios_t2.pct_change().iloc[i]
+                ret_t1 = ret_t1_serie.iloc[i]
+                ret_t2 = ret_t2_serie.iloc[i]
 
                 if posicion_actual == Señal.COMPRAR_SPREAD:
-                    # Long t1, short t2
                     ret_dia = ret_t1 - b * ret_t2
                 else:
-                    # Short t1, long t2
                     ret_dia = -ret_t1 + b * ret_t2
 
                 retornos_diarios.iloc[i] = ret_dia * tam_entrada / p.capital
@@ -209,8 +219,8 @@ def walk_forward(
     ticker1: str,
     ticker2: str,
     params: ParametrosBacktest | None = None,
-    años_deteccion: int = 3,
-    años_operacion: int = 1,
+    años_deteccion: int = WF_ANOS_DETECCION,
+    años_operacion: int = WF_ANOS_OPERACION,
     verbose: bool = True,
 ) -> pd.DataFrame:
     """
@@ -234,7 +244,7 @@ def walk_forward(
             (precios.index >= f_fin_det) & (precios.index < f_fin_op)
         ]
 
-        if len(oos) < 60:
+        if len(oos) < MIN_OBS:
             año_actual += 1
             continue
 
@@ -268,24 +278,34 @@ def optimizar_parametros(
     ticker2: str,
     grid: dict | None = None,
     metrica: str = "sharpe",
+    fraccion_is: float = 0.7,
 ) -> tuple[ParametrosBacktest, pd.DataFrame]:
     """
-    Grid search sobre los parámetros críticos de la estrategia.
-    Maximiza la métrica elegida (sharpe | sortino | calmar).
+    Grid search sobre parámetros críticos de la estrategia.
 
-    Grid por defecto:
-      entrada_z    : [1.5, 2.0, 2.5]
-      salida_z     : [0.25, 0.5]
-      window_zscore: [None (OU), 30, 60]
+    Divide los datos en in-sample (primeros fraccion_is) para optimizar
+    y out-of-sample (resto) para validar. Así los parámetros no se eligen
+    viendo los datos sobre los que luego se evalúan.
+
+    Args:
+        fraccion_is: fracción del histórico usada para optimizar (default 70%).
     """
     if grid is None:
         grid = {
-            "entrada_z":     [1.5, 2.0, 2.5],
-            "salida_z":      [0.25, 0.5],
-            "window_zscore": [None, 30, 60],
+            "entrada_z":     GRID_ENTRADA_Z,
+            "salida_z":      GRID_SALIDA_Z,
+            "window_zscore": GRID_WINDOW,
         }
 
-    resultados = []
+    n_is       = int(len(precios) * fraccion_is)
+    precios_is = precios.iloc[:n_is]
+
+    if len(precios_is) < MIN_OBS:
+        raise ValueError(
+            f"Datos insuficientes para grid search: {len(precios_is)} barras "
+            f"(mínimo {MIN_OBS}). Reduce fraccion_is o usa más histórico."
+        )
+
     combinaciones = [
         (e, s, w)
         for e in grid["entrada_z"]
@@ -294,28 +314,30 @@ def optimizar_parametros(
         if s < e
     ]
 
-    print(f"[INFO] Grid search: {len(combinaciones)} combinaciones...")
+    print(f"[INFO] Grid search: {len(combinaciones)} combinaciones "
+          f"(IS: {len(precios_is)} barras | OOS: {len(precios) - n_is} barras)...")
 
+    resultados = []
     for entrada, salida, window in combinaciones:
-        p = ParametrosBacktest(
-            entrada_z=entrada, salida_z=salida, window_zscore=window
-        )
-        motor = MotorBacktest(precios, ticker1, ticker2, p)
+        p = ParametrosBacktest(entrada_z=entrada, salida_z=salida, window_zscore=window)
         try:
-            res = motor.ejecutar()
+            res = MotorBacktest(precios_is, ticker1, ticker2, p).ejecutar()
             m   = res["metricas"]
             resultados.append({
-                "entrada_z":    entrada,
-                "salida_z":     salida,
+                "entrada_z":     entrada,
+                "salida_z":      salida,
                 "window_zscore": window,
-                "sharpe":       m["sharpe"],
-                "sortino":      m["sortino"],
-                "calmar":       m["calmar"],
-                "mdd":          m["mdd"],
-                "n_trades":     m["n_trades"],
+                "sharpe":        m["sharpe"],
+                "sortino":       m["sortino"],
+                "calmar":        m["calmar"],
+                "mdd":           m["mdd"],
+                "n_trades":      m["n_trades"],
             })
         except Exception:
             continue
+
+    if not resultados:
+        raise RuntimeError("Ninguna combinación del grid produjo resultados válidos.")
 
     df_grid = pd.DataFrame(resultados).sort_values(metrica, ascending=False)
     mejor   = df_grid.iloc[0]
@@ -326,7 +348,7 @@ def optimizar_parametros(
         window_zscore=None if pd.isna(mejor["window_zscore"]) else int(mejor["window_zscore"]),
     )
 
-    print(f"[OK] Mejores parámetros: entrada={mejor['entrada_z']}, "
+    print(f"[OK] Mejores parámetros (IS): entrada={mejor['entrada_z']}, "
           f"salida={mejor['salida_z']}, window={mejor['window_zscore']} "
           f"→ {metrica.upper()} = {mejor[metrica]:.3f}")
 
@@ -337,10 +359,10 @@ def optimizar_parametros(
 
 def simulacion_monte_carlo(
     retornos: pd.Series,
-    n_simulaciones: int = 1000,
-    horizonte_dias: int = 252,
-    capital_inicial: float = 100_000.0,
-    semilla: int = 42,
+    n_simulaciones: int = MC_N_SIMULACIONES,
+    horizonte_dias: int = MC_HORIZONTE_DIAS,
+    capital_inicial: float = CAPITAL_INICIAL,
+    semilla: int = MC_SEMILLA,
 ) -> dict:
     """
     Simula N trayectorias de capital futuras mediante bootstrapping de retornos.
@@ -379,9 +401,9 @@ def simulacion_monte_carlo(
 
 def bootstrap_sharpe(
     retornos: pd.Series,
-    n_bootstrap: int = 1000,
-    nivel_confianza: float = 0.95,
-    semilla: int = 42,
+    n_bootstrap: int = BS_N_BOOTSTRAP,
+    nivel_confianza: float = BS_NIVEL_CONFIANZA,
+    semilla: int = MC_SEMILLA,
 ) -> dict:
     """
     Calcula el intervalo de confianza del Sharpe Ratio mediante bootstrapping.
@@ -409,8 +431,8 @@ def bootstrap_sharpe(
 
 def test_permutaciones(
     retornos: pd.Series,
-    n_permutaciones: int = 500,
-    semilla: int = 42,
+    n_permutaciones: int = PERM_N,
+    semilla: int = PERM_SEMILLA,
 ) -> dict:
     """
     Valida estadísticamente que el Sharpe de la estrategia no es fruto del azar.

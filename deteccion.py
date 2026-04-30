@@ -1,17 +1,12 @@
 """
-deteccion.py — Detección de pares cointegrados (in-sample 2008–2020).
+deteccion.py — Detección de pares cointegrados con datos horarios (12 meses).
 
-Pipeline de dos etapas:
-  1. Pre-filtro Engle-Granger (rápido, O(n) por par):
-       Rechaza pares con p-value > umbral. Reduce el espacio de búsqueda ~10x.
-  2. Validación Johansen (robusto, multivariante):
-       Confirma la cointegración sin asumir dirección de causalidad.
-       Devuelve el estadístico de traza y el score de calidad.
+Pipeline de 2 etapas, de menor a mayor coste computacional:
+  1. Test Engle-Granger: cribado rápido de cointegración actual (O(n) por par)
+  2. Test Johansen     : validación robusta con puntuación
 
-Refactoriza las funciones del archivo original cointegración.py y añade:
-  - Pre-filtro EG para eficiencia computacional
-  - Exportación de resultados a CSV
-  - Evaluación rolling para verificar estabilidad temporal del par
+Usa datos horarios de Alpaca (últimos 12 meses ≈ 1638 barras).
+El objetivo es detectar pares cointegrados AHORA, no históricamente.
 """
 
 import itertools
@@ -23,21 +18,24 @@ import pandas as pd
 from statsmodels.tsa.stattools import coint
 from statsmodels.tsa.vector_ar.vecm import coint_johansen
 
-from datos import preparar_par, MIN_OBS
+from config import (
+    MIN_OBS_HORARIO, UMBRAL_EG, MIN_SCORE_JOHANSEN,
+    VENTANA_ROLLING,
+)
 
 warnings.filterwarnings("ignore")
 
 RESULTADOS_PATH = os.path.join(os.path.dirname(__file__), "pares_cointegrados.csv")
 
 
-# ── Test de Engle-Granger (pre-filtro rápido) ─────────────────────────────────
+# ── Etapa 1: Test Engle-Granger ───────────────────────────────────────────────
 
-def test_engle_granger(s1: pd.Series, s2: pd.Series, umbral_pvalue: float = 0.05) -> dict:
+def test_engle_granger(s1: pd.Series, s2: pd.Series, umbral_pvalue: float = UMBRAL_EG) -> dict:
     """
-    Test de cointegración de Engle-Granger en dos pasos.
-    Más rápido que Johansen; sirve como cribado inicial.
+    Test de cointegración de Engle-Granger en dos pasos. Cribado rápido O(n).
 
-    Devuelve dict con: pasa (bool), p_value, estadístico.
+    Returns:
+        dict con pasa (bool), p_value_eg, stat_eg.
     """
     log_s1 = np.log(s1)
     log_s2 = np.log(s2)
@@ -48,22 +46,23 @@ def test_engle_granger(s1: pd.Series, s2: pd.Series, umbral_pvalue: float = 0.05
         return {"pasa": False, "p_value_eg": 1.0, "stat_eg": 0.0}
 
 
-# ── Test de Johansen (validador robusto) ──────────────────────────────────────
+# ── Etapa 3: Test Johansen ────────────────────────────────────────────────────
 
 def test_johansen(s1: pd.Series, s2: pd.Series) -> dict:
     """
-    Test de cointegración de Johansen.
-    Utiliza el estadístico de traza al nivel de confianza del 95%.
+    Test de cointegración de Johansen. Estadístico de traza al 95% de confianza.
+    Score = traza / valor_crítico — cuanto mayor, más fuerte la cointegración.
 
-    Score = traza / valor_crítico_95% → cuanto mayor, más fuerte la cointegración.
+    Returns:
+        dict con cointegrado (bool), traza, critico, score.
     """
     log_par = np.log(pd.concat([s1, s2], axis=1)).dropna()
-    if len(log_par) < MIN_OBS:
+    if len(log_par) < MIN_OBS_HORARIO:
         return {"cointegrado": False, "traza": 0.0, "critico": 0.0, "score": 0.0}
     try:
         res     = coint_johansen(log_par, det_order=0, k_ar_diff=1)
         traza   = float(res.lr1[0])
-        critico = float(res.cvt[0, 1])  # valor crítico al 95%
+        critico = float(res.cvt[0, 1])
         score   = traza / critico if critico > 0 else 0.0
         return {
             "cointegrado": traza > critico,
@@ -75,28 +74,117 @@ def test_johansen(s1: pd.Series, s2: pd.Series) -> dict:
         return {"cointegrado": False, "traza": 0.0, "critico": 0.0, "score": 0.0}
 
 
-# ── Estabilidad temporal (ventana rolling) ────────────────────────────────────
+# ── Escáner principal ─────────────────────────────────────────────────────────
+
+def escanear_todos_los_pares(
+    df_precios: pd.DataFrame,
+    umbral_eg: float = UMBRAL_EG,
+    min_score_johansen: float = MIN_SCORE_JOHANSEN,
+    max_pares: int | None = None,
+    verbose: bool = True,
+) -> pd.DataFrame:
+    """
+    Escanea todos los pares posibles en 2 etapas:
+
+      1. Test Engle-Granger: cribado rápido (O(n) por par)
+      2. Test Johansen:      validación robusta
+
+    Args:
+        df_precios:         DataFrame de precios horarios (filas=hora, columnas=tickers).
+        umbral_eg:          P-value máximo para el test EG.
+        min_score_johansen: Score mínimo Johansen (traza / valor_crítico).
+        max_pares:          Límite de pares a evaluar (útil para pruebas).
+        verbose:            Imprime resumen de cada etapa.
+
+    Returns:
+        DataFrame ordenado por score descendente con columnas:
+        ticker1, ticker2, score, traza, critico, p_value_eg, n_obs.
+    """
+    tickers     = df_precios.columns.tolist()
+    todos_pares = list(itertools.combinations(tickers, 2))
+    if max_pares:
+        todos_pares = todos_pares[:max_pares]
+
+    if verbose:
+        print(f"\n{'='*60}")
+        print(f"  ESCÁNER DE PARES COINTEGRADOS")
+        print(f"{'='*60}")
+        print(f"  Universo:        {len(tickers):>6} tickers")
+        print(f"  Pares a evaluar: {len(todos_pares):>6,}")
+        print(f"  EG + Johansen en curso...")
+
+    resultados = []
+    n_eg_pasan = 0
+
+    for t1, t2 in todos_pares:
+        s1 = df_precios[t1].dropna()
+        s2 = df_precios[t2].dropna()
+        idx = s1.index.intersection(s2.index)
+        if len(idx) < MIN_OBS_HORARIO:
+            continue
+        s1, s2 = s1.loc[idx], s2.loc[idx]
+
+        # Etapa 1: Engle-Granger
+        eg = test_engle_granger(s1, s2, umbral_eg)
+        if not eg["pasa"]:
+            continue
+        n_eg_pasan += 1
+
+        # Etapa 2: Johansen
+        joh = test_johansen(s1, s2)
+        if not joh["cointegrado"] or joh["score"] < min_score_johansen:
+            continue
+
+        resultados.append({
+            "ticker1":    t1,
+            "ticker2":    t2,
+            "score":      round(joh["score"], 4),
+            "traza":      round(joh["traza"], 4),
+            "critico":    round(joh["critico"], 4),
+            "p_value_eg": round(eg["p_value_eg"], 4),
+            "n_obs":      len(idx),
+        })
+
+    if verbose:
+        print(f"\n[RESUMEN]")
+        print(f"  Pares evaluados:           {len(todos_pares):>6,}")
+        print(f"  Pares que pasan EG:        {n_eg_pasan:>6,}")
+        print(f"  Pares confirmados (final): {len(resultados):>6,}")
+        print(f"{'='*60}\n")
+
+    if not resultados:
+        return pd.DataFrame()
+
+    return (
+        pd.DataFrame(resultados)
+        .sort_values("score", ascending=False)
+        .reset_index(drop=True)
+    )
+
+
+# ── Estabilidad rolling para gráficos (evaluacion.py) ─────────────────────────
 
 def estabilidad_rolling(
     precios: pd.DataFrame,
     t1: str,
     t2: str,
-    ventana: int = 252,
+    ventana: int = VENTANA_ROLLING,
 ) -> pd.DataFrame:
     """
-    Evalúa la cointegración en ventanas rodantes para verificar que el par
-    mantiene su relación a lo largo del tiempo (no solo en un periodo).
+    Evalúa la cointegración en ventanas rolling para visualización.
+    Usa Johansen para obtener el score continuo.
 
-    Devuelve DataFrame con fecha, estadístico de traza y valor crítico.
-    Útil para el gráfico rolling del módulo de evaluación.
+    Returns:
+        DataFrame indexado por fecha con columnas: traza, critico, score.
     """
-    par = preparar_par(precios, t1, t2)
-    if par is None:
+    if t1 not in precios.columns or t2 not in precios.columns:
         return pd.DataFrame()
 
-    log_par  = np.log(par)
-    filas    = []
+    log_par = np.log(precios[[t1, t2]]).dropna()
+    if len(log_par) < ventana + 10:
+        return pd.DataFrame()
 
+    filas = []
     for i in range(ventana, len(log_par)):
         subset = log_par.iloc[i - ventana : i]
         try:
@@ -113,75 +201,6 @@ def estabilidad_rolling(
             continue
 
     return pd.DataFrame(filas).set_index("fecha") if filas else pd.DataFrame()
-
-
-# ── Escáner principal ─────────────────────────────────────────────────────────
-
-def escanear_todos_los_pares(
-    df_precios: pd.DataFrame,
-    umbral_eg: float = 0.05,
-    min_score_johansen: float = 1.0,
-    max_pares: int | None = None,
-    verbose: bool = True,
-) -> pd.DataFrame:
-    """
-    Escanea todas las combinaciones de pares posibles en dos etapas:
-      1. Pre-filtro Engle-Granger  (descarta rápidamente)
-      2. Validación Johansen       (confirma y puntúa)
-
-    Devuelve DataFrame ordenado por score descendente.
-    """
-    tickers = df_precios.columns.tolist()
-    pares   = list(itertools.combinations(tickers, 2))
-    if max_pares:
-        pares = pares[:max_pares]
-
-    if verbose:
-        print(f"\n[INFO] Escaneando {len(pares)} pares posibles...")
-        print(f"       Universo: {len(tickers)} tickers")
-
-    resultados = []
-    n_eg_pasaron = 0
-
-    for i, (t1, t2) in enumerate(pares):
-        par = preparar_par(df_precios, t1, t2)
-        if par is None:
-            continue
-
-        # Etapa 1: Pre-filtro Engle-Granger
-        eg = test_engle_granger(par[t1], par[t2], umbral_eg)
-        if not eg["pasa"]:
-            continue
-        n_eg_pasaron += 1
-
-        # Etapa 2: Validación Johansen
-        joh = test_johansen(par[t1], par[t2])
-        if not joh["cointegrado"] or joh["score"] < min_score_johansen:
-            continue
-
-        resultados.append({
-            "ticker1":    t1,
-            "ticker2":    t2,
-            "score":      round(joh["score"], 4),
-            "traza":      round(joh["traza"], 4),
-            "critico":    round(joh["critico"], 4),
-            "p_value_eg": round(eg["p_value_eg"], 4),
-            "n_obs":      len(par),
-        })
-
-        if verbose and len(resultados) % 10 == 0:
-            print(f"  -> {len(resultados)} pares cointegrados encontrados hasta ahora...")
-
-    if verbose:
-        print(f"\n[RESUMEN] {len(pares)} pares evaluados")
-        print(f"           {n_eg_pasaron} pasaron el pre-filtro EG")
-        print(f"           {len(resultados)} confirmados por Johansen")
-
-    if not resultados:
-        return pd.DataFrame()
-
-    df = pd.DataFrame(resultados).sort_values("score", ascending=False).reset_index(drop=True)
-    return df
 
 
 # ── Guardar y cargar resultados ───────────────────────────────────────────────
@@ -201,5 +220,4 @@ def cargar_pares(path: str = RESULTADOS_PATH) -> pd.DataFrame:
 
 def top_pares(n: int = 20, path: str = RESULTADOS_PATH) -> pd.DataFrame:
     """Devuelve los N mejores pares por score de cointegración."""
-    df = cargar_pares(path)
-    return df.head(n)
+    return cargar_pares(path).head(n)

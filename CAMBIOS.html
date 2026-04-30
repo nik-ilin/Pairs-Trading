@@ -1,0 +1,752 @@
+<!DOCTYPE html>
+<html xmlns="http://www.w3.org/1999/xhtml" lang="en" xml:lang="en"><head>
+
+<meta charset="utf-8">
+<meta name="generator" content="quarto-1.8.27">
+
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=yes">
+
+
+<title>cambios</title>
+<style>
+code{white-space: pre-wrap;}
+span.smallcaps{font-variant: small-caps;}
+div.columns{display: flex; gap: min(4vw, 1.5em);}
+div.column{flex: auto; overflow-x: auto;}
+div.hanging-indent{margin-left: 1.5em; text-indent: -1.5em;}
+ul.task-list{list-style: none;}
+ul.task-list li input[type="checkbox"] {
+  width: 0.8em;
+  margin: 0 0.8em 0.2em -1em; /* quarto-specific, see https://github.com/quarto-dev/quarto-cli/issues/4556 */ 
+  vertical-align: middle;
+}
+/* CSS for syntax highlighting */
+html { -webkit-text-size-adjust: 100%; }
+pre > code.sourceCode { white-space: pre; position: relative; }
+pre > code.sourceCode > span { display: inline-block; line-height: 1.25; }
+pre > code.sourceCode > span:empty { height: 1.2em; }
+.sourceCode { overflow: visible; }
+code.sourceCode > span { color: inherit; text-decoration: inherit; }
+div.sourceCode { margin: 1em 0; }
+pre.sourceCode { margin: 0; }
+@media screen {
+div.sourceCode { overflow: auto; }
+}
+@media print {
+pre > code.sourceCode { white-space: pre-wrap; }
+pre > code.sourceCode > span { text-indent: -5em; padding-left: 5em; }
+}
+pre.numberSource code
+  { counter-reset: source-line 0; }
+pre.numberSource code > span
+  { position: relative; left: -4em; counter-increment: source-line; }
+pre.numberSource code > span > a:first-child::before
+  { content: counter(source-line);
+    position: relative; left: -1em; text-align: right; vertical-align: baseline;
+    border: none; display: inline-block;
+    -webkit-touch-callout: none; -webkit-user-select: none;
+    -khtml-user-select: none; -moz-user-select: none;
+    -ms-user-select: none; user-select: none;
+    padding: 0 4px; width: 4em;
+  }
+pre.numberSource { margin-left: 3em;  padding-left: 4px; }
+div.sourceCode
+  {   }
+@media screen {
+pre > code.sourceCode > span > a:first-child::before { text-decoration: underline; }
+}
+</style>
+
+
+<script src="CAMBIOS_files/libs/clipboard/clipboard.min.js"></script>
+<script src="CAMBIOS_files/libs/quarto-html/quarto.js" type="module"></script>
+<script src="CAMBIOS_files/libs/quarto-html/tabsets/tabsets.js" type="module"></script>
+<script src="CAMBIOS_files/libs/quarto-html/axe/axe-check.js" type="module"></script>
+<script src="CAMBIOS_files/libs/quarto-html/popper.min.js"></script>
+<script src="CAMBIOS_files/libs/quarto-html/tippy.umd.min.js"></script>
+<script src="CAMBIOS_files/libs/quarto-html/anchor.min.js"></script>
+<link href="CAMBIOS_files/libs/quarto-html/tippy.css" rel="stylesheet">
+<link href="CAMBIOS_files/libs/quarto-html/quarto-syntax-highlighting-ed96de9b727972fe78a7b5d16c58bf87.css" rel="stylesheet" id="quarto-text-highlighting-styles">
+<script src="CAMBIOS_files/libs/bootstrap/bootstrap.min.js"></script>
+<link href="CAMBIOS_files/libs/bootstrap/bootstrap-icons.css" rel="stylesheet">
+<link href="CAMBIOS_files/libs/bootstrap/bootstrap-9e3ffae467580fdb927a41352e75a2e0.min.css" rel="stylesheet" append-hash="true" id="quarto-bootstrap" data-mode="light">
+
+
+</head>
+
+<body class="fullcontent quarto-light">
+
+<div id="quarto-content" class="page-columns page-rows-contents page-layout-article">
+
+<main class="content" id="quarto-document-content">
+
+
+
+
+<section id="cambios-respecto-al-proyecto-original" class="level1">
+<h1>Cambios respecto al proyecto original</h1>
+<hr>
+<section id="fuente-de-datos-alpaca-en-lugar-de-yfinance" class="level2">
+<h2 class="anchored" data-anchor-id="fuente-de-datos-alpaca-en-lugar-de-yfinance">1. Fuente de datos — Alpaca en lugar de yfinance</h2>
+<p><strong>Original:</strong> todo el sistema usaba yfinance como única fuente de datos.</p>
+<p><strong>Nuevo:</strong> Alpaca es la fuente principal, yfinance actúa como fallback.</p>
+<table class="caption-top table">
+<thead>
+<tr class="header">
+<th>Uso</th>
+<th>Fuente</th>
+<th>Frecuencia</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td>Detección de pares</td>
+<td>Alpaca</td>
+<td>Horaria — últimos 12 meses</td>
+</tr>
+<tr class="even">
+<td>Señales diarias</td>
+<td>Alpaca</td>
+<td>Horaria — últimos 12 meses</td>
+</tr>
+<tr class="odd">
+<td>Backtesting</td>
+<td>Alpaca</td>
+<td>Diaria — 2020 hasta hoy</td>
+</tr>
+<tr class="even">
+<td>Fallback (sin API keys)</td>
+<td>yfinance</td>
+<td>Diaria</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Por qué:</strong> el backtesting y las señales en vivo deben usar la misma fuente. Si el backtest usa yfinance y las señales usan Alpaca, los resultados del backtest no son representativos del comportamiento real de la estrategia. Con Alpaca en ambos lados, lo que funciona en el backtest funciona igual en producción.</p>
+<p><strong>Variables descargadas:</strong> <code>close</code>, <code>open</code> y <code>volume</code>. Se descarta <code>high</code>, <code>low</code>, <code>vwap</code> y <code>trade_count</code> — no aportan para una estrategia de pairs trading con stop-loss por z-score.</p>
+<hr>
+</section>
+<section id="caché-inteligente-con-ttl-por-tipo-de-dato" class="level2">
+<h2 class="anchored" data-anchor-id="caché-inteligente-con-ttl-por-tipo-de-dato">2. Caché inteligente con TTL por tipo de dato</h2>
+<p><strong>Original:</strong> si el archivo de caché existía, siempre se usaba sin importar su antigüedad.</p>
+<p><strong>Nuevo:</strong> cada tipo de dato tiene un tiempo de vida (TTL) distinto según con qué frecuencia cambia:</p>
+<table class="caption-top table">
+<thead>
+<tr class="header">
+<th>Dato</th>
+<th>TTL</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td>Alpaca diario (backtesting)</td>
+<td>24 horas</td>
+</tr>
+<tr class="even">
+<td>Alpaca horario — mercado abierto</td>
+<td>1 hora</td>
+</tr>
+<tr class="odd">
+<td>Alpaca horario — mercado cerrado</td>
+<td>No expira</td>
+</tr>
+<tr class="even">
+<td>yfinance histórico (fallback)</td>
+<td>No expira</td>
+</tr>
+</tbody>
+</table>
+<p>El caché horario no expira fuera de horario de mercado porque descargar datos cuando el mercado está cerrado no añade información nueva.</p>
+<hr>
+</section>
+<section id="limpieza-de-datos" class="level2">
+<h2 class="anchored" data-anchor-id="limpieza-de-datos">3. Limpieza de datos</h2>
+<section id="eliminación-de-look-ahead-bias" class="level3">
+<h3 class="anchored" data-anchor-id="eliminación-de-look-ahead-bias">Eliminación de look-ahead bias</h3>
+<p><strong>Original:</strong></p>
+<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb1"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb1-1"><a href="#cb1-1" aria-hidden="true" tabindex="-1"></a>df <span class="op">=</span> df.ffill().bfill()</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<p>El <code>bfill()</code> rellena huecos hacia atrás usando precios futuros para completar el pasado. En un backtest esto implica que el modelo “ve” información que no habría tenido disponible en ese momento, inflando artificialmente los resultados.</p>
+<p><strong>Nuevo:</strong></p>
+<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb2"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb2-1"><a href="#cb2-1" aria-hidden="true" tabindex="-1"></a>df <span class="op">=</span> df.ffill()</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<p>Solo se rellena hacia adelante: los días sin mercado mantienen el precio del cierre anterior. El índice temporal queda regular sin introducir sesgo.</p>
+</section>
+<section id="filtro-de-liquidez" class="level3">
+<h3 class="anchored" data-anchor-id="filtro-de-liquidez">Filtro de liquidez</h3>
+<p>Se elimina cualquier ticker cuyo volumen medio diario sea inferior a 500.000 acciones antes de entrar al pipeline de detección. Tickers ilíquidos generan spreads ruidosos y son difíciles de ejecutar en real.</p>
+<p><strong>Decisión de diseño:</strong> no se filtran movimientos extremos de precio. Una subida o bajada brusca puede ser real (OPA, earnings, crisis) y eliminarla introduciría sesgo. Se prefiere asumir un falso positivo ocasional antes que descartar información real.</p>
+<hr>
+</section>
+</section>
+<section id="control-de-horario-de-mercado" class="level2">
+<h2 class="anchored" data-anchor-id="control-de-horario-de-mercado">4. Control de horario de mercado</h2>
+<p><strong>Original:</strong> el sistema podía ejecutarse en cualquier momento.</p>
+<p><strong>Nuevo:</strong> tres funciones en <code>datos.py</code> controlan cuándo tiene sentido ejecutar cada parte del sistema:</p>
+<ul>
+<li><code>mercado_abierto()</code> — devuelve <code>True</code> si NYSE está abierto (lunes-viernes 9:30-16:00 NY)</li>
+<li><code>tiempo_hasta_apertura()</code> — devuelve el tiempo hasta la próxima apertura</li>
+<li><code>verificar_horario_mercado(modo)</code> — bloquea la ejecución de señales fuera de horario</li>
+</ul>
+<hr>
+</section>
+<section id="configuración-centralizada" class="level2">
+<h2 class="anchored" data-anchor-id="configuración-centralizada">5. Configuración centralizada</h2>
+<p><strong>Original:</strong> todos los parámetros del algoritmo estaban hardcodeados en cada módulo por separado. Cambiar el umbral de entrada al z-score, por ejemplo, requería editar varios archivos.</p>
+<p><strong>Nuevo:</strong> <code>config.py</code> centraliza todos los parámetros del sistema. Las API keys se leen desde <code>.env</code> y nunca se escriben en el código.</p>
+<p>Parámetros principales:</p>
+<table class="caption-top table">
+<colgroup>
+<col style="width: 50%">
+<col style="width: 50%">
+</colgroup>
+<thead>
+<tr class="header">
+<th>Categoría</th>
+<th>Ejemplos</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td>Mercado</td>
+<td><code>MERCADO_APERTURA</code>, <code>MERCADO_CIERRE</code>, <code>MERCADO_ZONA_HORARIA</code></td>
+</tr>
+<tr class="even">
+<td>Datos</td>
+<td><code>MIN_OBS</code>, <code>MIN_OBS_HORARIO</code>, <code>MIN_VOLUMEN_DIARIO</code></td>
+</tr>
+<tr class="odd">
+<td>Detección</td>
+<td><code>UMBRAL_EG</code>, <code>MIN_SCORE_JOHANSEN</code>, <code>VENTANA_ROLLING</code></td>
+</tr>
+<tr class="even">
+<td>Kalman</td>
+<td><code>KALMAN_DELTA</code>, <code>KALMAN_VAR_OBS</code></td>
+</tr>
+<tr class="odd">
+<td>Señales</td>
+<td><code>ENTRADA_Z</code>, <code>SALIDA_Z</code>, <code>STOP_Z</code></td>
+</tr>
+<tr class="even">
+<td>Backtesting</td>
+<td><code>CAPITAL_INICIAL</code>, <code>FRACCION_RIESGO</code>, <code>SLIPPAGE</code>, <code>COMISION</code></td>
+</tr>
+<tr class="odd">
+<td>Validación estadística</td>
+<td><code>MC_N_SIMULACIONES</code>, <code>BS_N_BOOTSTRAP</code>, <code>PERM_N</code></td>
+</tr>
+</tbody>
+</table>
+<hr>
+</section>
+<section id="detección-de-pares-cointegración-actual-no-histórica" class="level2">
+<h2 class="anchored" data-anchor-id="detección-de-pares-cointegración-actual-no-histórica">6. Detección de pares — cointegración actual, no histórica</h2>
+<p><strong>Original:</strong> la detección buscaba pares que hubieran estado cointegrados en el histórico 2008-2020. El resultado era una lista de relaciones que en algún momento del pasado funcionaron.</p>
+<p><strong>Nuevo:</strong> la detección usa datos horarios de los últimos 12 meses (≈ 1638 barras) y busca pares cointegrados <strong>ahora</strong>. Un par que estuvo cointegrado entre 2012 y 2015 no es relevante si hoy no lo está.</p>
+<p><strong>Pipeline:</strong> Engle-Granger como cribado rápido → Johansen como validación robusta. Sin pre-filtros adicionales — la cointegración no requiere que los activos sean del mismo sector ni que tengan alta correlación de retornos.</p>
+<p><strong>Coste computacional:</strong> ~125.000 pares para el S&amp;P 500 completo. EG tarda ~0.001s por par, por lo que el scan completo toma ~3 minutos. Asumible para una ejecución semanal.</p>
+<hr>
+</section>
+<section id="automatización-pipeline-diario-y-pipeline-semanal" class="level2">
+<h2 class="anchored" data-anchor-id="automatización-pipeline-diario-y-pipeline-semanal">7. Automatización — pipeline diario y pipeline semanal</h2>
+<p><strong>Original:</strong> un único pipeline diario sin distinción entre buscar pares nuevos y verificar pares activos.</p>
+<p><strong>Nuevo:</strong> dos pipelines separados con responsabilidades y frecuencias distintas:</p>
+<section id="pipeline-diario-apertura-de-mercado-930-est" class="level3">
+<h3 class="anchored" data-anchor-id="pipeline-diario-apertura-de-mercado-930-est">Pipeline diario — apertura de mercado (9:30 EST)</h3>
+<ol type="1">
+<li><strong>Verificación de cointegración activa</strong> — para cada par con posición abierta, se ejecuta un test EG sobre las barras más recientes. Si la cointegración se ha roto, la señal pasa a <code>SUSPENDIDO</code> y la posición debe cerrarse.</li>
+<li><strong>Generación de señales</strong> — para los pares que siguen cointegrados, calcula el z-score actual y emite la señal del día (LONG / SHORT / CERRAR / HOLD).</li>
+</ol>
+</section>
+<section id="pipeline-semanal-fin-de-semana" class="level3">
+<h3 class="anchored" data-anchor-id="pipeline-semanal-fin-de-semana">Pipeline semanal — fin de semana</h3>
+<ol type="1">
+<li>Comprueba si <code>pares_cointegrados.csv</code> tiene más de 7 días de antigüedad.</li>
+<li>Descarga datos horarios de los últimos 12 meses para todo el S&amp;P 500.</li>
+<li>Ejecuta el scan completo EG + Johansen.</li>
+<li>Actualiza el CSV con los pares actualmente cointegrados.</li>
+</ol>
+<p><strong>Por qué frecuencias distintas:</strong> la cointegración entre dos activos no cambia de un día para otro — escanear 125.000 pares cada día sería innecesario y costoso. En cambio, verificar si un par activo sigue siendo válido antes de operar es crítico y barato (pocos pares, un test rápido).</p>
+<hr>
+</section>
+</section>
+<section id="spread-y-filtro-de-kalman-adaptación-a-datos-horarios" class="level2">
+<h2 class="anchored" data-anchor-id="spread-y-filtro-de-kalman-adaptación-a-datos-horarios">8. Spread y Filtro de Kalman — adaptación a datos horarios</h2>
+<section id="half-life-en-barras-no-en-días" class="level3">
+<h3 class="anchored" data-anchor-id="half-life-en-barras-no-en-días">Half-life en barras, no en días</h3>
+<p>El proceso Ornstein-Uhlenbeck estima cuánto tarda el spread en volver a su media. Este tiempo (half-life) se usaba como ventana del z-score.</p>
+<p><strong>Original:</strong> el half-life se expresaba en días y se clampeaba entre 5 y 252 días.</p>
+<p><strong>Nuevo:</strong> se expresa en barras y se clampea entre los equivalentes horarios: - Mínimo: 5 días × 6.5 h/día = 32.5 barras - Máximo: 252 días × 6.5 h/día = 1638 barras</p>
+</section>
+<section id="warm-up-del-filtro-de-kalman" class="level3">
+<h3 class="anchored" data-anchor-id="warm-up-del-filtro-de-kalman">Warm-up del Filtro de Kalman</h3>
+<p>El Kalman necesita un periodo inicial para estimar el hedge ratio antes de que sus estimaciones sean fiables.</p>
+<p><strong>Original:</strong> warm-up de 60 barras — equivale a 3 meses con datos diarios, pero solo a 9 días con datos horarios.</p>
+<p><strong>Nuevo:</strong> warm-up de <code>60 × 6.5 = 390 barras</code> — siempre equivale a 60 días de negociación independientemente de la frecuencia.</p>
+</section>
+<section id="ventana-de-volatilidad-para-el-sizing" class="level3">
+<h3 class="anchored" data-anchor-id="ventana-de-volatilidad-para-el-sizing">Ventana de volatilidad para el sizing</h3>
+<p><strong>Original:</strong> ventana de 20 barras para calcular la volatilidad del spread — correcto para datos diarios (20 días), pero con datos horarios equivale a solo 3 días.</p>
+<p><strong>Nuevo:</strong> <code>20 días × 6.5 h/día = 130 barras</code> — siempre representa 20 días de negociación.</p>
+<hr>
+</section>
+</section>
+<section id="backtesting-corrección-de-bugs" class="level2">
+<h2 class="anchored" data-anchor-id="backtesting-corrección-de-bugs">9. Backtesting — corrección de bugs</h2>
+<section id="cálculo-de-retornos-dentro-del-bucle-bug-de-rendimiento" class="level3">
+<h3 class="anchored" data-anchor-id="cálculo-de-retornos-dentro-del-bucle-bug-de-rendimiento">Cálculo de retornos dentro del bucle (bug de rendimiento)</h3>
+<p><strong>Original:</strong> en cada iteración del bucle principal se llamaba a <code>pct_change()</code> sobre la serie completa de precios. Con N barras, esto ejecutaba N × N operaciones en lugar de N.</p>
+<p><strong>Nuevo:</strong> los retornos se precalculan una sola vez antes de entrar al bucle. El tiempo de ejecución pasa de cuadrático a lineal.</p>
+</section>
+<section id="grid-search-separación-in-sample-out-of-sample" class="level3">
+<h3 class="anchored" data-anchor-id="grid-search-separación-in-sample-out-of-sample">Grid search — separación in-sample / out-of-sample</h3>
+<p><strong>Original:</strong> el grid search optimizaba los parámetros (umbral de entrada, umbral de salida, ventana del z-score) sobre todos los datos disponibles y luego evaluaba el resultado sobre esos mismos datos. Esto garantiza encontrar los mejores parámetros para el pasado, pero no dice nada sobre el futuro.</p>
+<p><strong>Nuevo:</strong> los datos se dividen en dos partes: - <strong>In-sample (70%):</strong> se usa para buscar los mejores parámetros. - <strong>Out-of-sample (30%):</strong> se usa para evaluar si esos parámetros funcionan en datos que el optimizador no ha visto.</p>
+<p>Si el rendimiento en out-of-sample es significativamente peor que en in-sample, es señal de overfitting.</p>
+</section>
+<section id="parámetros-desde-config" class="level3">
+<h3 class="anchored" data-anchor-id="parámetros-desde-config">Parámetros desde config</h3>
+<p>Todos los valores antes hardcodeados (capital inicial, número de simulaciones Monte Carlo, semillas aleatorias, ventanas del walk-forward, etc.) se leen ahora desde <code>config.py</code>.</p>
+<hr>
+</section>
+</section>
+<section id="nuevos-archivos" class="level2">
+<h2 class="anchored" data-anchor-id="nuevos-archivos">10. Nuevos archivos</h2>
+<table class="caption-top table">
+<colgroup>
+<col style="width: 50%">
+<col style="width: 50%">
+</colgroup>
+<thead>
+<tr class="header">
+<th>Archivo</th>
+<th>Descripción</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td><code>config.py</code></td>
+<td>Configuración centralizada de todos los parámetros del sistema</td>
+</tr>
+<tr class="even">
+<td><code>.env</code></td>
+<td>API keys de Alpaca — nunca se sube a GitHub</td>
+</tr>
+<tr class="odd">
+<td><code>requirements.txt</code></td>
+<td>Dependencias del proyecto con versiones mínimas</td>
+</tr>
+<tr class="even">
+<td><code>.gitignore</code></td>
+<td>Excluye <code>.env</code>, caché y archivos generados del repositorio</td>
+</tr>
+</tbody>
+</table>
+</section>
+</section>
+
+</main>
+<!-- /main column -->
+<script id="quarto-html-after-body" type="application/javascript">
+  window.document.addEventListener("DOMContentLoaded", function (event) {
+    const icon = "";
+    const anchorJS = new window.AnchorJS();
+    anchorJS.options = {
+      placement: 'right',
+      icon: icon
+    };
+    anchorJS.add('.anchored');
+    const isCodeAnnotation = (el) => {
+      for (const clz of el.classList) {
+        if (clz.startsWith('code-annotation-')) {                     
+          return true;
+        }
+      }
+      return false;
+    }
+    const onCopySuccess = function(e) {
+      // button target
+      const button = e.trigger;
+      // don't keep focus
+      button.blur();
+      // flash "checked"
+      button.classList.add('code-copy-button-checked');
+      var currentTitle = button.getAttribute("title");
+      button.setAttribute("title", "Copied!");
+      let tooltip;
+      if (window.bootstrap) {
+        button.setAttribute("data-bs-toggle", "tooltip");
+        button.setAttribute("data-bs-placement", "left");
+        button.setAttribute("data-bs-title", "Copied!");
+        tooltip = new bootstrap.Tooltip(button, 
+          { trigger: "manual", 
+            customClass: "code-copy-button-tooltip",
+            offset: [0, -8]});
+        tooltip.show();    
+      }
+      setTimeout(function() {
+        if (tooltip) {
+          tooltip.hide();
+          button.removeAttribute("data-bs-title");
+          button.removeAttribute("data-bs-toggle");
+          button.removeAttribute("data-bs-placement");
+        }
+        button.setAttribute("title", currentTitle);
+        button.classList.remove('code-copy-button-checked');
+      }, 1000);
+      // clear code selection
+      e.clearSelection();
+    }
+    const getTextToCopy = function(trigger) {
+      const outerScaffold = trigger.parentElement.cloneNode(true);
+      const codeEl = outerScaffold.querySelector('code');
+      for (const childEl of codeEl.children) {
+        if (isCodeAnnotation(childEl)) {
+          childEl.remove();
+        }
+      }
+      return codeEl.innerText;
+    }
+    const clipboard = new window.ClipboardJS('.code-copy-button:not([data-in-quarto-modal])', {
+      text: getTextToCopy
+    });
+    clipboard.on('success', onCopySuccess);
+    if (window.document.getElementById('quarto-embedded-source-code-modal')) {
+      const clipboardModal = new window.ClipboardJS('.code-copy-button[data-in-quarto-modal]', {
+        text: getTextToCopy,
+        container: window.document.getElementById('quarto-embedded-source-code-modal')
+      });
+      clipboardModal.on('success', onCopySuccess);
+    }
+      var localhostRegex = new RegExp(/^(?:http|https):\/\/localhost\:?[0-9]*\//);
+      var mailtoRegex = new RegExp(/^mailto:/);
+        var filterRegex = new RegExp('/' + window.location.host + '/');
+      var isInternal = (href) => {
+          return filterRegex.test(href) || localhostRegex.test(href) || mailtoRegex.test(href);
+      }
+      // Inspect non-navigation links and adorn them if external
+     var links = window.document.querySelectorAll('a[href]:not(.nav-link):not(.navbar-brand):not(.toc-action):not(.sidebar-link):not(.sidebar-item-toggle):not(.pagination-link):not(.no-external):not([aria-hidden]):not(.dropdown-item):not(.quarto-navigation-tool):not(.about-link)');
+      for (var i=0; i<links.length; i++) {
+        const link = links[i];
+        if (!isInternal(link.href)) {
+          // undo the damage that might have been done by quarto-nav.js in the case of
+          // links that we want to consider external
+          if (link.dataset.originalHref !== undefined) {
+            link.href = link.dataset.originalHref;
+          }
+        }
+      }
+    function tippyHover(el, contentFn, onTriggerFn, onUntriggerFn) {
+      const config = {
+        allowHTML: true,
+        maxWidth: 500,
+        delay: 100,
+        arrow: false,
+        appendTo: function(el) {
+            return el.parentElement;
+        },
+        interactive: true,
+        interactiveBorder: 10,
+        theme: 'quarto',
+        placement: 'bottom-start',
+      };
+      if (contentFn) {
+        config.content = contentFn;
+      }
+      if (onTriggerFn) {
+        config.onTrigger = onTriggerFn;
+      }
+      if (onUntriggerFn) {
+        config.onUntrigger = onUntriggerFn;
+      }
+      window.tippy(el, config); 
+    }
+    const noterefs = window.document.querySelectorAll('a[role="doc-noteref"]');
+    for (var i=0; i<noterefs.length; i++) {
+      const ref = noterefs[i];
+      tippyHover(ref, function() {
+        // use id or data attribute instead here
+        let href = ref.getAttribute('data-footnote-href') || ref.getAttribute('href');
+        try { href = new URL(href).hash; } catch {}
+        const id = href.replace(/^#\/?/, "");
+        const note = window.document.getElementById(id);
+        if (note) {
+          return note.innerHTML;
+        } else {
+          return "";
+        }
+      });
+    }
+    const xrefs = window.document.querySelectorAll('a.quarto-xref');
+    const processXRef = (id, note) => {
+      // Strip column container classes
+      const stripColumnClz = (el) => {
+        el.classList.remove("page-full", "page-columns");
+        if (el.children) {
+          for (const child of el.children) {
+            stripColumnClz(child);
+          }
+        }
+      }
+      stripColumnClz(note)
+      if (id === null || id.startsWith('sec-')) {
+        // Special case sections, only their first couple elements
+        const container = document.createElement("div");
+        if (note.children && note.children.length > 2) {
+          container.appendChild(note.children[0].cloneNode(true));
+          for (let i = 1; i < note.children.length; i++) {
+            const child = note.children[i];
+            if (child.tagName === "P" && child.innerText === "") {
+              continue;
+            } else {
+              container.appendChild(child.cloneNode(true));
+              break;
+            }
+          }
+          if (window.Quarto?.typesetMath) {
+            window.Quarto.typesetMath(container);
+          }
+          return container.innerHTML
+        } else {
+          if (window.Quarto?.typesetMath) {
+            window.Quarto.typesetMath(note);
+          }
+          return note.innerHTML;
+        }
+      } else {
+        // Remove any anchor links if they are present
+        const anchorLink = note.querySelector('a.anchorjs-link');
+        if (anchorLink) {
+          anchorLink.remove();
+        }
+        if (window.Quarto?.typesetMath) {
+          window.Quarto.typesetMath(note);
+        }
+        if (note.classList.contains("callout")) {
+          return note.outerHTML;
+        } else {
+          return note.innerHTML;
+        }
+      }
+    }
+    for (var i=0; i<xrefs.length; i++) {
+      const xref = xrefs[i];
+      tippyHover(xref, undefined, function(instance) {
+        instance.disable();
+        let url = xref.getAttribute('href');
+        let hash = undefined; 
+        if (url.startsWith('#')) {
+          hash = url;
+        } else {
+          try { hash = new URL(url).hash; } catch {}
+        }
+        if (hash) {
+          const id = hash.replace(/^#\/?/, "");
+          const note = window.document.getElementById(id);
+          if (note !== null) {
+            try {
+              const html = processXRef(id, note.cloneNode(true));
+              instance.setContent(html);
+            } finally {
+              instance.enable();
+              instance.show();
+            }
+          } else {
+            // See if we can fetch this
+            fetch(url.split('#')[0])
+            .then(res => res.text())
+            .then(html => {
+              const parser = new DOMParser();
+              const htmlDoc = parser.parseFromString(html, "text/html");
+              const note = htmlDoc.getElementById(id);
+              if (note !== null) {
+                const html = processXRef(id, note);
+                instance.setContent(html);
+              } 
+            }).finally(() => {
+              instance.enable();
+              instance.show();
+            });
+          }
+        } else {
+          // See if we can fetch a full url (with no hash to target)
+          // This is a special case and we should probably do some content thinning / targeting
+          fetch(url)
+          .then(res => res.text())
+          .then(html => {
+            const parser = new DOMParser();
+            const htmlDoc = parser.parseFromString(html, "text/html");
+            const note = htmlDoc.querySelector('main.content');
+            if (note !== null) {
+              // This should only happen for chapter cross references
+              // (since there is no id in the URL)
+              // remove the first header
+              if (note.children.length > 0 && note.children[0].tagName === "HEADER") {
+                note.children[0].remove();
+              }
+              const html = processXRef(null, note);
+              instance.setContent(html);
+            } 
+          }).finally(() => {
+            instance.enable();
+            instance.show();
+          });
+        }
+      }, function(instance) {
+      });
+    }
+        let selectedAnnoteEl;
+        const selectorForAnnotation = ( cell, annotation) => {
+          let cellAttr = 'data-code-cell="' + cell + '"';
+          let lineAttr = 'data-code-annotation="' +  annotation + '"';
+          const selector = 'span[' + cellAttr + '][' + lineAttr + ']';
+          return selector;
+        }
+        const selectCodeLines = (annoteEl) => {
+          const doc = window.document;
+          const targetCell = annoteEl.getAttribute("data-target-cell");
+          const targetAnnotation = annoteEl.getAttribute("data-target-annotation");
+          const annoteSpan = window.document.querySelector(selectorForAnnotation(targetCell, targetAnnotation));
+          const lines = annoteSpan.getAttribute("data-code-lines").split(",");
+          const lineIds = lines.map((line) => {
+            return targetCell + "-" + line;
+          })
+          let top = null;
+          let height = null;
+          let parent = null;
+          if (lineIds.length > 0) {
+              //compute the position of the single el (top and bottom and make a div)
+              const el = window.document.getElementById(lineIds[0]);
+              top = el.offsetTop;
+              height = el.offsetHeight;
+              parent = el.parentElement.parentElement;
+            if (lineIds.length > 1) {
+              const lastEl = window.document.getElementById(lineIds[lineIds.length - 1]);
+              const bottom = lastEl.offsetTop + lastEl.offsetHeight;
+              height = bottom - top;
+            }
+            if (top !== null && height !== null && parent !== null) {
+              // cook up a div (if necessary) and position it 
+              let div = window.document.getElementById("code-annotation-line-highlight");
+              if (div === null) {
+                div = window.document.createElement("div");
+                div.setAttribute("id", "code-annotation-line-highlight");
+                div.style.position = 'absolute';
+                parent.appendChild(div);
+              }
+              div.style.top = top - 2 + "px";
+              div.style.height = height + 4 + "px";
+              div.style.left = 0;
+              let gutterDiv = window.document.getElementById("code-annotation-line-highlight-gutter");
+              if (gutterDiv === null) {
+                gutterDiv = window.document.createElement("div");
+                gutterDiv.setAttribute("id", "code-annotation-line-highlight-gutter");
+                gutterDiv.style.position = 'absolute';
+                const codeCell = window.document.getElementById(targetCell);
+                const gutter = codeCell.querySelector('.code-annotation-gutter');
+                gutter.appendChild(gutterDiv);
+              }
+              gutterDiv.style.top = top - 2 + "px";
+              gutterDiv.style.height = height + 4 + "px";
+            }
+            selectedAnnoteEl = annoteEl;
+          }
+        };
+        const unselectCodeLines = () => {
+          const elementsIds = ["code-annotation-line-highlight", "code-annotation-line-highlight-gutter"];
+          elementsIds.forEach((elId) => {
+            const div = window.document.getElementById(elId);
+            if (div) {
+              div.remove();
+            }
+          });
+          selectedAnnoteEl = undefined;
+        };
+          // Handle positioning of the toggle
+      window.addEventListener(
+        "resize",
+        throttle(() => {
+          elRect = undefined;
+          if (selectedAnnoteEl) {
+            selectCodeLines(selectedAnnoteEl);
+          }
+        }, 10)
+      );
+      function throttle(fn, ms) {
+      let throttle = false;
+      let timer;
+        return (...args) => {
+          if(!throttle) { // first call gets through
+              fn.apply(this, args);
+              throttle = true;
+          } else { // all the others get throttled
+              if(timer) clearTimeout(timer); // cancel #2
+              timer = setTimeout(() => {
+                fn.apply(this, args);
+                timer = throttle = false;
+              }, ms);
+          }
+        };
+      }
+        // Attach click handler to the DT
+        const annoteDls = window.document.querySelectorAll('dt[data-target-cell]');
+        for (const annoteDlNode of annoteDls) {
+          annoteDlNode.addEventListener('click', (event) => {
+            const clickedEl = event.target;
+            if (clickedEl !== selectedAnnoteEl) {
+              unselectCodeLines();
+              const activeEl = window.document.querySelector('dt[data-target-cell].code-annotation-active');
+              if (activeEl) {
+                activeEl.classList.remove('code-annotation-active');
+              }
+              selectCodeLines(clickedEl);
+              clickedEl.classList.add('code-annotation-active');
+            } else {
+              // Unselect the line
+              unselectCodeLines();
+              clickedEl.classList.remove('code-annotation-active');
+            }
+          });
+        }
+    const findCites = (el) => {
+      const parentEl = el.parentElement;
+      if (parentEl) {
+        const cites = parentEl.dataset.cites;
+        if (cites) {
+          return {
+            el,
+            cites: cites.split(' ')
+          };
+        } else {
+          return findCites(el.parentElement)
+        }
+      } else {
+        return undefined;
+      }
+    };
+    var bibliorefs = window.document.querySelectorAll('a[role="doc-biblioref"]');
+    for (var i=0; i<bibliorefs.length; i++) {
+      const ref = bibliorefs[i];
+      const citeInfo = findCites(ref);
+      if (citeInfo) {
+        tippyHover(citeInfo.el, function() {
+          var popup = window.document.createElement('div');
+          citeInfo.cites.forEach(function(cite) {
+            var citeDiv = window.document.createElement('div');
+            citeDiv.classList.add('hanging-indent');
+            citeDiv.classList.add('csl-entry');
+            var biblioDiv = window.document.getElementById('ref-' + cite);
+            if (biblioDiv) {
+              citeDiv.innerHTML = biblioDiv.innerHTML;
+            }
+            popup.appendChild(citeDiv);
+          });
+          return popup.innerHTML;
+        });
+      }
+    }
+  });
+  </script>
+</div> <!-- /content -->
+
+
+
+
+</body></html>

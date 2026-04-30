@@ -17,7 +17,7 @@ Modelos implementados:
 import numpy as np
 import pandas as pd
 
-DIAS_ANIO = 252  # días de negociación por año
+from config import DIAS_ANIO, HORAS_ANIO
 
 
 # ── Rendimiento ───────────────────────────────────────────────────────────────
