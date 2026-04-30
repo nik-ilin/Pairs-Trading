@@ -15,7 +15,9 @@
       "Bash(git cat-file *)",
       "Bash(awk '$1==\"blob\" && $3>500000 {print $3, $4}')",
       "Bash(python -c \"import sys; sys.path.insert\\(0, '/Users/nikolai/Desktop/Programacion/Python/Finanzas'\\); import datos\")",
-      "Bash(python -c \"import automatizacion, datos\")"
+      "Bash(python -c \"import automatizacion, datos\")",
+      "Bash(python -c ' *)",
+      "Bash(.venv/bin/pip show *)"
     ]
   }
 }

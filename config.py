@@ -21,6 +21,10 @@ MERCADO_CIERRE       = (16, 0)
 ALPACA_API_KEY    = os.getenv("ALPACA_API_KEY", "")
 ALPACA_API_SECRET = os.getenv("ALPACA_API_SECRET", "")
 
+# ── Telegram ──────────────────────────────────────────────────────────────────
+TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
+TELEGRAM_CHAT_ID   = os.getenv("TELEGRAM_CHAT_ID", "")   # tu chat_id personal (opcional)
+
 # ── Procesamiento de datos ────────────────────────────────────────────────────
 MIN_VOLUMEN_DIARIO  = 500_000   # volumen medio diario mínimo para considerar un ticker líquido
 

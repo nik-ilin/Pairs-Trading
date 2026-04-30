@@ -1,32 +1,34 @@
-# Sistema de Arbitraje Estadístico — Pairs Trading (2008–2026)
+# Sistema de Arbitraje Estadístico — Pairs Trading (S&P 500)
 
-Modelo cuantitativo de trading automatizado basado en la cointegración estadística entre pares de acciones del mercado estadounidense. El sistema detecta pares cointegrados, genera señales de entrada y salida, y valida la estrategia mediante backtesting riguroso con múltiples métricas de riesgo.
+Modelo cuantitativo de trading automatizado basado en la cointegración estadística entre pares de acciones del mercado estadounidense. El sistema detecta pares cointegrados, genera señales de entrada y salida, valida la estrategia con backtesting riguroso y se controla en tiempo real desde un bot de Telegram.
 
 ---
 
 ## Tabla de contenidos
 
-1. [Descripción del proyecto](#descripción-del-proyecto)
+1. [Descripción](#descripción)
 2. [Fundamentos matemáticos](#fundamentos-matemáticos)
-3. [Arquitectura del sistema](#arquitectura-del-sistema)
+3. [Arquitectura](#arquitectura)
 4. [Instalación](#instalación)
-5. [Uso](#uso)
-6. [Métricas de evaluación](#métricas-de-evaluación)
-7. [Gráficos generados](#gráficos-generados)
-8. [Objetivos SMART](#objetivos-smart)
+5. [Configuración](#configuración)
+6. [Uso — CLI](#uso--cli)
+7. [Bot de Telegram](#bot-de-telegram)
+8. [Sistema de fuentes de datos](#sistema-de-fuentes-de-datos)
+9. [Métricas de evaluación](#métricas-de-evaluación)
+10. [Gráficos generados](#gráficos-generados)
+11. [Objetivos SMART](#objetivos-smart)
 
 ---
 
-## Descripción del proyecto
+## Descripción
 
-El **arbitraje estadístico por pares** (pairs trading) es una estrategia de mercado neutral que explota la relación histórica de largo plazo entre dos activos. Cuando el precio relativo entre ellos se aleja de su equilibrio estadístico, el modelo toma posiciones opuestas (comprar el barato, vender el caro) esperando que la relación se restablezca.
+El **arbitraje estadístico por pares** (pairs trading) explota la relación histórica de largo plazo entre dos activos. Cuando el precio relativo se aleja de su equilibrio estadístico, el modelo toma posiciones opuestas (comprar el barato, vender el caro) esperando que la relación se restablezca.
 
-El sistema opera en dos fases:
-
-| Fase | Periodo | Propósito |
+| Fase | Datos | Propósito |
 |---|---|---|
-| In-sample  | 2008–2020 | Detectar pares cointegrados |
-| Out-of-sample | 2020–2026 | Backtesting y validación honesta |
+| Detección de pares | Alpaca horario — últimos 12 meses | Cointegración actual, no histórica |
+| Señales diarias | Alpaca horario — últimos 12 meses | Kalman + z-score + ADF en tiempo real |
+| Backtesting | Alpaca diario — 2020 a hoy | Validación out-of-sample honesta |
 
 ---
 
@@ -34,108 +36,90 @@ El sistema opera en dos fases:
 
 ### 1. Detección de cointegración
 
-#### Test de Engle-Granger (pre-filtro)
+#### Test de Engle-Granger (pre-filtro rápido)
 Dado un par $(S_1, S_2)$, se ajusta la regresión:
 
 $$\log S_{1,t} = \alpha + \beta \cdot \log S_{2,t} + \varepsilon_t$$
 
-Si los residuos $\varepsilon_t$ son estacionarios (test ADF: $p < 0.05$), el par está cointegrado. Este test es computacionalmente barato y se usa como cribado inicial para reducir el universo de búsqueda $\approx 10\times$.
+Si los residuos $\varepsilon_t$ son estacionarios (test ADF: $p < 0.05$), el par está cointegrado. Coste: ~0.001 s/par → escaneo de 126.000 pares en ~3 min.
 
-#### Test de Johansen (validador)
-El test de traza de Johansen evalúa el rango de cointegración del sistema bivariante sin asumir una dirección de causalidad. Utiliza el estadístico de traza $\lambda_{traza}$ comparado con el valor crítico al 95%:
+#### Test de Johansen (validador robusto)
+Evalúa el rango de cointegración sin asumir dirección de causalidad. Estadístico de traza al 95%:
 
 $$\text{Score} = \frac{\lambda_{traza}}{\text{Valor Crítico}_{95\%}}$$
 
-Un score $> 1$ confirma la cointegración. Los pares se ordenan por score descendente.
+Score > 1 confirma cointegración. Los pares se ordenan por score descendente.
 
 ---
 
 ### 2. Ratio de cobertura dinámico — Filtro de Kalman
 
-El ratio de cobertura $\beta_t$ entre los dos activos no es constante en el tiempo. Un ratio estático (OLS) ignora cambios estructurales del negocio, rotaciones sectoriales y ciclos económicos.
+El ratio $\beta_t$ no es constante. El Filtro de Kalman lo actualiza en cada barra:
 
-El **Filtro de Kalman** modela $\beta_t$ como un proceso de paseo aleatorio y lo actualiza en cada nueva observación:
+**Estado:** $\theta_t = [\beta_t,\ \alpha_t]^\top$, modelado como paseo aleatorio.
 
-**Modelo de espacio de estados:**
-$$\theta_t = \begin{bmatrix} \beta_t \\ \alpha_t \end{bmatrix}, \quad \theta_t = \theta_{t-1} + w_t, \quad w_t \sim \mathcal{N}(0, V_w)$$
-
-**Ecuación de observación:**
-$$y_t = \mathbf{F}_t^\top \theta_t + \varepsilon_t, \quad \mathbf{F}_t = [x_t, 1]^\top, \quad \varepsilon_t \sim \mathcal{N}(0, V_e)$$
-
-**Actualización (Ganancia de Kalman):**
+**Ganancia de Kalman:**
 $$K_t = P_{t|t-1} \mathbf{F}_t \cdot (V_e + \mathbf{F}_t^\top P_{t|t-1} \mathbf{F}_t)^{-1}$$
 $$\theta_t = \theta_{t-1} + K_t(y_t - \mathbf{F}_t^\top \theta_{t-1})$$
 
-El spread resultante es más estacionario que con OLS estático, lo que produce señales más fiables.
+El spread resultante es más estacionario que con OLS estático. Warmup: 390 barras (60 días hábiles en horario).
 
 ---
 
 ### 3. Proceso Ornstein-Uhlenbeck — Velocidad de reversión
 
-El spread se modela como un proceso **Ornstein-Uhlenbeck (OU)**:
+El spread se modela como:
 
 $$dS_t = \kappa(\mu - S_t)\,dt + \sigma\,dW_t$$
 
-Donde:
-- $\kappa$ = velocidad de reversión a la media
-- $\mu$ = nivel de equilibrio del spread
-- $\sigma$ = volatilidad del spread
+**Half-life** (barras para recorrer la mitad del camino a la media):
 
-En forma discreta (estimable por OLS):
+$$\text{Half-life} = \frac{-\ln 2}{b}, \quad \Delta S_t = a + b \cdot S_{t-1} + \varepsilon_t$$
 
-$$\Delta S_t = a + b \cdot S_{t-1} + \varepsilon_t, \quad b = -\kappa \cdot \Delta t$$
-
-La **vida media (half-life)** mide cuántos días tarda el spread en recorrer la mitad del camino hacia su media:
-
-$$\text{Half-life} = \frac{\ln 2}{\kappa} = \frac{-\ln 2}{b}$$
-
-Esta vida media se usa automáticamente como ventana del z-score en lugar de un valor fijo arbitrario. Un half-life de 20 días $\Rightarrow$ ventana de 20 días.
+El half-life se usa automáticamente como ventana del z-score. Rango válido: 32.5–1638 barras horarias.
 
 ---
 
 ### 4. Z-score y señales de trading
 
-El spread normalizado (z-score) mide cuántas desviaciones estándar se aleja el spread de su media rolling:
-
 $$Z_t = \frac{S_t - \mu_{rolling}(S, \text{HL})}{\sigma_{rolling}(S, \text{HL})}$$
-
-**Reglas de entrada/salida:**
 
 | Condición | Acción | Razonamiento |
 |---|---|---|
-| $Z_t < -2.0\sigma$ | **LONG spread** (comprar $S_1$, vender $S_2$) | Spread barato: $S_1$ infravalorado relativo a $S_2$ |
-| $Z_t > +2.0\sigma$ | **SHORT spread** (vender $S_1$, comprar $S_2$) | Spread caro: $S_1$ sobrevalorado relativo a $S_2$ |
-| $|Z_t| < 0.5\sigma$ | **CERRAR posición** | Reversión completada |
-| $|Z_t| > 3.5\sigma$ | **STOP-LOSS** | Ruptura de la relación de cointegración |
+| $Z_t < -2.0$ | **LONG spread** | $S_1$ infravalorado relativo a $S_2$ |
+| $Z_t > +2.0$ | **SHORT spread** | $S_1$ sobrevalorado relativo a $S_2$ |
+| $\|Z_t\| < 0.5$ | **CERRAR** | Reversión completada |
+| $\|Z_t\| > 3.5$ | **STOP-LOSS** | Ruptura de cointegración |
 
 ---
 
-### 5. Dimensionado de posiciones — Volatility Scaling
-
-El tamaño de cada posición se ajusta inversamente a la volatilidad rolling del spread:
+### 5. Dimensionado — Volatility Scaling
 
 $$N_t = \frac{\text{Capital} \times f}{\sigma_{20d}(S_t)}$$
 
-Donde $f = 10\%$ es la fracción de riesgo por trade. Esto mantiene una exposición al riesgo **constante en unidades monetarias** independientemente del régimen de volatilidad.
+Con $f = 10\%$ de fracción de riesgo. Mantiene exposición constante independientemente del régimen de volatilidad.
 
 ---
 
-## Arquitectura del sistema
+## Arquitectura
 
 ```
 Finanzas/
-├── datos.py          # Descarga y caché de precios (yfinance, Parquet)
-├── deteccion.py      # Engle-Granger pre-filtro + Johansen validador
-├── spread.py         # Filtro de Kalman, proceso OU, z-score, señales
-├── backtesting.py    # Motor de backtesting, Walk-Forward, Monte Carlo
-├── metricas.py       # Sharpe, Sortino, Calmar, Omega, VaR, CVaR, MDD
-├── automatizacion.py # Pipeline diario de señales + ADF en tiempo real
-├── evaluacion.py     # 11 tipos de gráficos para presentación
-├── main.py           # Orquestador CLI
-├── cache/            # Precios en Parquet (generado automáticamente)
-├── graficos/         # Gráficos PNG exportados (generado automáticamente)
-├── pares_cointegrados.csv  # Resultado del scan
-└── señales_diarias.csv     # Señales del día
+├── config.py          → Parámetros centralizados; API keys vía .env
+├── datos.py           → Descarga Alpaca/yfinance; caché Parquet; fallback automático
+├── deteccion.py       → Engle-Granger pre-filtro + Johansen validador
+├── spread.py          → Kalman, proceso OU, z-score, señales de trading
+├── backtesting.py     → Motor backtest; walk-forward; grid search; Monte Carlo
+├── metricas.py        → Sharpe, Sortino, Calmar, Omega, MDD, VaR, CVaR
+├── automatizacion.py  → Pipeline diario y semanal; gestión de posiciones
+├── evaluacion.py      → Gráficos dark-theme guardados en graficos/
+├── main.py            → Orquestador CLI (--modo scan/diario/backtest/evaluar/full)
+├── bot_telegram.py    → Bot de Telegram (espejo completo del CLI)
+├── cache/             → Parquet con precios (TTL automático por tipo de dato)
+├── graficos/          → PNG exportados por evaluacion.py
+├── pares_cointegrados.csv  → Resultado del scan semanal
+├── señales_diarias.csv     → Señales del pipeline diario
+└── estado_posiciones.json  → Posiciones abiertas persistidas
 ```
 
 **Flujo de datos:**
@@ -143,7 +127,9 @@ Finanzas/
 ```
 datos.py → deteccion.py → spread.py → backtesting.py → metricas.py
                                     ↓
-                           automatizacion.py (modo diario)
+                           automatizacion.py
+                            ↙           ↘
+                     main.py (CLI)   bot_telegram.py (Telegram)
                                     ↓
                            evaluacion.py (gráficos)
 ```
@@ -153,66 +139,244 @@ datos.py → deteccion.py → spread.py → backtesting.py → metricas.py
 ## Instalación
 
 ```bash
-pip install yfinance pandas numpy matplotlib statsmodels scipy
+# 1. Crear entorno virtual
+python -m venv .venv
+source .venv/bin/activate        # macOS/Linux
+.venv\Scripts\activate           # Windows
+
+# 2. Instalar dependencias
+pip install alpaca-py yfinance pandas numpy matplotlib statsmodels scipy \
+            python-dotenv python-telegram-bot
 ```
+
+> **`python-dotenv`** es requerido para cargar las credenciales del `.env`.  
+> **`alpaca-py`** es opcional: si no está instalado o las credenciales fallan, el sistema usa `yfinance` automáticamente.  
+> **`python-telegram-bot`** solo es necesario si vas a usar el bot de Telegram.
 
 ---
 
-## Uso
+## Configuración
+
+### Archivo `.env` (en la raíz del proyecto)
+
+```env
+# Alpaca (opcional — sin él el sistema usa yfinance automáticamente)
+ALPACA_API_KEY=tu_api_key_aqui
+ALPACA_API_SECRET=tu_api_secret_aqui
+
+# Telegram (necesario para bot_telegram.py)
+TELEGRAM_BOT_TOKEN=123456789:ABCdef-GHIjkl...
+TELEGRAM_CHAT_ID=987654321
+```
+
+> El `.env` nunca se sube al repositorio (está en `.gitignore`).
+
+### Sistema de fallback automático
+
+El sistema tolera la ausencia total de credenciales de Alpaca:
+
+| Situación | Comportamiento |
+|---|---|
+| Sin `.env` o `python-dotenv` no instalado | Avisa y continúa; keys quedan vacías → yfinance |
+| `alpaca-py` no instalado | Detectado al arrancar → fallback a yfinance |
+| Credenciales inválidas / error de autenticación | `try/except` global → fallback a yfinance |
+| Rate limit o error de red durante la descarga | `try/except` global → fallback a yfinance |
+| Todo OK con Alpaca | Usa Alpaca (datos horarios, mayor resolución) |
+
+---
+
+## Uso — CLI
 
 ### Pipeline completo (recomendado la primera vez)
 ```bash
 python main.py --modo full
 ```
+Ejecuta scan + backtest de los 5 mejores pares de forma no interactiva.
 
-### Detectar pares cointegrados en el universo S&P 500
+### Scan semanal — detectar pares cointegrados
 ```bash
 python main.py --modo scan
 ```
+Descarga datos horarios de ~500 tickers (12 meses) y escanea ~126.000 pares.  
+**Duración estimada:** 15–35 min (descarga) + 3–6 min (escaneo).  
+Al terminar muestra un menú interactivo para elegir qué pares guardar.
 
-### Backtesting de un par específico con optimización y gráficos
+### Pipeline diario — señales del día
 ```bash
+# Top 20 pares (default)
+python main.py --modo diario
+
+# Top 50 pares
+python main.py --modo diario --top-n 50
+```
+Lee `pares_cointegrados.csv` (sin re-escanear), descarga datos recientes y genera `señales_diarias.csv`.
+
+### Backtest de un par específico
+```bash
+# Con parámetros por defecto
+python main.py --modo backtest --par KO PEP
+
+# Con optimización + walk-forward + gráficos
 python main.py --modo backtest --par AAPL MSFT --optimizar --walk-forward --graficos
 ```
 
-### Backtesting de los 10 mejores pares detectados
+### Backtest interactivo desde el CSV
 ```bash
-python main.py --modo backtest --top-n 10 --graficos
+# Menú de selección con los top 10 pares guardados
+python main.py --modo backtest
+
+# Top 30 en el menú
+python main.py --modo backtest --top-n 30
 ```
 
-### Generar informe visual completo de un par
+### Informe visual completo
 ```bash
 python main.py --modo evaluar --par KO PEP
 ```
+Genera todos los gráficos en `graficos/` y muestra métricas completas.
 
-### Señales del día (ejecutar al cierre del mercado, 22:05 UTC)
-```bash
-python main.py --modo señales
+### Argumentos disponibles
+
+| Argumento | Valores | Default | Descripción |
+|---|---|---|---|
+| `--modo` | `scan`, `diario`, `backtest`, `evaluar`, `full` | `diario` | Modo de ejecución |
+| `--par` | `TICKER1 TICKER2` | — | Par específico |
+| `--top-n` | entero | `10` | Número de pares a evaluar |
+| `--optimizar` | flag | — | Grid search de parámetros |
+| `--walk-forward` | flag | — | Validación walk-forward |
+| `--graficos` | flag | — | Genera y guarda gráficos PNG |
+
+---
+
+## Bot de Telegram
+
+El bot de Telegram espeja completamente el CLI: cada modo del sistema tiene su comando equivalente, con salida formateada en Markdown y envío automático de gráficos PNG.
+
+### Paso 1 — Crear el bot con BotFather
+
+1. Abre Telegram y busca **@BotFather**
+2. Escribe `/newbot`
+3. Elige un nombre visible (ej: `Pairs Trading Bot`)
+4. Elige un username que termine en `bot` (ej: `mis_pares_bot`)
+5. BotFather te dará el **token** → cópialo
+
+### Paso 2 — Obtener tu Chat ID
+
+1. Busca en Telegram **@userinfobot**
+2. Escribe `/start`
+3. Te devolverá tu ID numérico (ej: `987654321`)
+
+> El `TELEGRAM_CHAT_ID` restringe el bot para que solo responda a ti. Sin él, cualquiera que encuentre el bot puede usarlo.
+
+### Paso 3 — Configurar `.env`
+
+```env
+TELEGRAM_BOT_TOKEN=123456789:ABCdef-GHIjkl...
+TELEGRAM_CHAT_ID=987654321
 ```
+
+### Paso 4 — Arrancar el bot
+
+```bash
+python bot_telegram.py
+```
+
+Abre Telegram, busca tu bot por su username y escribe `/start`.
+
+### Paso 5 (opcional) — Ejecutar en background
+
+```bash
+# macOS/Linux — persiste al cerrar la terminal
+nohup python bot_telegram.py > bot.log 2>&1 &
+
+# Ver log en tiempo real
+tail -f bot.log
+
+# Detener
+kill $(pgrep -f bot_telegram.py)
+```
+
+---
+
+### Comandos del bot
+
+| Comando | Equivalente CLI | Descripción |
+|---|---|---|
+| `/start` | — | Bienvenida y menú de ayuda |
+| `/ayuda` | — | Lista de comandos |
+| `/diario [N]` | `--modo diario --top-n N` | Pipeline diario para top N pares (default 20) |
+| `/senales` | — | Señales del último `/diario` guardadas en CSV |
+| `/estado` | — | Posiciones abiertas con dirección, fecha y z-score de entrada |
+| `/pares [N]` | — | Top N pares del CSV ordenados por score (default 10) |
+| `/backtest T1 T2` | `--modo backtest --par T1 T2` | Backtest 2020–hoy con todas las métricas |
+| `/evaluar T1 T2` | `--modo evaluar --par T1 T2` | Backtest + genera y envía todos los gráficos PNG |
+| `/scan` | `--modo scan` | Scan completo S&P 500 en background (~20-35 min) |
+
+### Ejemplos de uso
+
+```
+/diario 50           → Señales para los 50 mejores pares
+/pares 20            → Top 20 pares del CSV
+/backtest KO PEP     → Backtest Coca-Cola vs PepsiCo
+/evaluar AAPL MSFT   → Informe completo + gráficos enviados por Telegram
+/estado              → Posiciones abiertas actuales
+/scan                → Iniciar scan completo (avisa cuando termina)
+```
+
+### Ejemplo de respuesta — `/diario 50`
+
+```
+✅ Pipeline diario — 2026-04-30 09:35
+
+📊 Evaluados: 50 | ▲▼ Entradas: 2 | ✕ Cierres: 1 | — Hold: 47 | ⚠ Susp: 0
+
+🔔 Señales de entrada:
+▲ `NRG/DIS`  Z=+2.14 β=0.923 HL=89b Vol=NORMAL
+▼ `MSCI/NRG` Z=-2.31 β=1.102 HL=64b Vol=BAJA
+
+✕ Cierres recomendados:
+✕ `COF/TPL` Z=+0.43
+```
+
+---
+
+## Sistema de fuentes de datos
+
+| Uso | Fuente primaria | Fallback | Frecuencia | TTL caché |
+|---|---|---|---|---|
+| Detección de pares | Alpaca | yfinance diario | Horario — 12 meses | 1h (mercado abierto) / ∞ |
+| Señales diarias | Alpaca | yfinance diario | Horario — 12 meses | 1h (mercado abierto) / ∞ |
+| Backtesting | Alpaca | yfinance diario | Diario — 2020–hoy | 24h |
+| yfinance OHLCV fallback | — | yfinance diario | Diario — 13 meses* | 24h |
+| Lista S&P 500 | GitHub CSV | Wikipedia | — | — |
+| Sectores S&P 500 | GitHub CSV | Wikipedia / yfinance | — | 30 días |
+
+> *El fallback de yfinance descarga 395 días (365 + 30 de buffer para festivos) para garantizar siempre ≥252 barras hábiles.
 
 ---
 
 ## Métricas de evaluación
 
-### Métricas de rendimiento
+### Rendimiento
 
 | Métrica | Fórmula | Objetivo |
 |---|---|---|
-| **CAGR** | $(V_f / V_0)^{1/n} - 1$ | Máximo posible |
+| **CAGR** | $(V_f / V_0)^{1/n} - 1$ | Máximo |
 | **Sharpe Ratio** | $\bar{r}_e / \sigma_r \cdot \sqrt{252}$ | **> 1.0** |
 | **Sortino Ratio** | $\bar{r}_e / \sigma_{down} \cdot \sqrt{252}$ | > 1.5 |
-| **Calmar Ratio** | $\text{CAGR} / |\text{MDD}|$ | > 0.5 |
-| **Omega Ratio** | $\sum \text{ganancias} / \sum \text{pérdidas}$ | > 1.5 |
+| **Calmar Ratio** | CAGR / \|MDD\| | > 0.5 |
+| **Omega Ratio** | Σ ganancias / Σ pérdidas | > 1.5 |
+| **Profit Factor** | Beneficio bruto / Pérdida bruta | > 1.3 |
 
-### Métricas de riesgo
+### Riesgo
 
 | Métrica | Descripción | Objetivo |
 |---|---|---|
-| **Máx. Drawdown (MDD)** | Mayor caída pico-a-valle | **< 15%** |
-| **VaR 95%** | Pérdida máxima en el 95% de los días | Referencia |
+| **Máx. Drawdown** | Mayor caída pico-a-valle | **< 15%** |
+| **VaR 95%** | Pérdida máxima en el 95% de días | Referencia |
 | **CVaR 95%** | Pérdida media en el peor 5% de casos | < VaR × 1.5 |
 
-> El **CVaR** (también llamado *Expected Shortfall*) es superior al VaR porque captura el comportamiento de la cola de la distribución. Dos estrategias con el mismo VaR pueden tener CVaR muy diferentes.
+> El **CVaR** (Expected Shortfall) captura el comportamiento de cola: dos estrategias con el mismo VaR pueden tener CVaR muy diferentes.
 
 ### Validación estadística
 
@@ -220,7 +384,7 @@ python main.py --modo señales
 |---|---|
 | **Bootstrap Sharpe** | Intervalo de confianza del Sharpe (1000 remuestras) |
 | **Test de permutaciones** | Verifica que los retornos no son aleatorios ($p < 0.05$) |
-| **Monte Carlo** | Distribución de resultados futuros (1000 trayectorias) |
+| **Monte Carlo** | Distribución de resultados futuros (1000 trayectorias, 1 año) |
 | **ADF en tiempo real** | Confirma estacionariedad del spread antes de operar |
 | **Johansen rolling** | Detecta rupturas de cointegración en tiempo real |
 
@@ -228,43 +392,44 @@ python main.py --modo señales
 
 ## Gráficos generados
 
-Todos los gráficos se guardan en `graficos/` con estilo dark profesional.
+Guardados en `graficos/` con estilo dark profesional. Generados con `--modo evaluar` o `/evaluar T1 T2` en el bot.
 
 | Archivo | Descripción |
 |---|---|
-| `01_curva_capital_*.png` | Curva de capital con drawdown superpuesto y límite 15% |
-| `02_spread_zscore_*.png` | Spread y z-score con marcas de entrada/salida |
-| `03_rolling_sharpe_*.png` | Sharpe Ratio rodante (ventana 252 días) |
-| `04_distribucion_retornos_*.png` | Histograma de retornos con distribución normal y VaR/CVaR |
-| `05_heatmap_mensual_*.png` | Heatmap de retornos mensuales por año |
-| `06_monte_carlo_*.png` | Abanico de trayectorias MC + distribución del capital final |
-| `07_rolling_cointegracion_*.png` | Estabilidad temporal de la cointegración (Johansen) |
-| `08_precio_relativo_*.png` | Precios normalizados y beta dinámico (Kalman) |
-| `09_walk_forward_*.png` | Sharpe Ratio por ventana walk-forward |
-| `10_analisis_trades_*.png` | Duración y PnL de cada trade |
-| `11_panel_metricas_*.png` | Panel resumen con todas las métricas y semáforos SMART |
+| `01_curva_capital_T1_T2.png` | Curva de capital + drawdown superpuesto (límite 15% marcado) |
+| `02_spread_zscore_T1_T2.png` | Spread y z-score con marcas de entrada/salida/stop |
+| `03_monte_carlo_T1_T2.png` | 1000 trayectorias MC + distribución del capital final |
+| `04_panel_metricas_T1_T2.png` | Panel resumen: todas las métricas con semáforos SMART |
+| `07_rolling_cointegracion_T1_T2.png` | Estabilidad temporal de la cointegración (Johansen rolling) |
 
 ---
 
 ## Objetivos SMART
 
 ### Objetivo 1 — Detección de pares cointegrados ✓
-- **S**: `deteccion.py` + `datos.py` — universo S&P 500, periodos 2008–2026
-- **M**: CSV con pares validados, ordenados por score Johansen
-- **A**: Pipeline EG (pre-filtro) + Johansen (validador)
-- **R**: Base de toda la estrategia
-- **T**: Datos desde 2008-01-01
+- **S**: `deteccion.py` + `datos.py` — universo S&P 500 completo (~500 tickers, ~126.000 pares)
+- **M**: CSV con score Johansen, p-value EG y número de observaciones por par
+- **A**: Pipeline EG (pre-filtro ~0.001s/par) + Johansen (validador robusto)
+- **R**: Base de toda la estrategia; se actualiza semanalmente
+- **T**: Datos horarios de los últimos 12 meses (cointegración actual, no histórica)
 
-### Objetivo 2 — Backtesting parametrizable ✓
-- **S**: `backtesting.py` — motor walk-forward, grid search, Monte Carlo
-- **M**: Validación Sharpe > 1.0 y MDD < 15% con semáforos visuales
-- **A**: Parámetros configurables: entrada/salida z-score, ventana OU, slippage
-- **R**: Valida la viabilidad antes de operar en vivo
-- **T**: Out-of-sample 2020–2026
+### Objetivo 2 — Backtesting riguroso ✓
+- **S**: `backtesting.py` — walk-forward, grid search IS/OOS 70/30, Monte Carlo, permutaciones
+- **M**: Sharpe > 1.0 y MDD < 15% con semáforos visuales en panel de métricas
+- **A**: Parámetros configurables: z-scores de entrada/salida, ventana OU, slippage, comisión
+- **R**: Valida la viabilidad antes de operar en vivo (split estricto IS/OOS)
+- **T**: Out-of-sample 2020–hoy (datos nunca vistos en la detección)
 
-### Objetivo 3 — Automatización y sostenibilidad ✓
-- **S**: `automatizacion.py` — señales reproducibles con tests estadísticos diarios
-- **M**: Señales CSV + JSON con z-score, ADF, régimen de volatilidad, alerta de ruptura
-- **A**: `python main.py --modo señales` (programable con cron/scheduler)
-- **R**: Operación continua a corto, medio y largo plazo
-- **T**: Pipeline listo para producción
+### Objetivo 3 — Automatización con fallback ✓
+- **S**: `automatizacion.py` + `datos.py` — señales reproducibles con doble fuente de datos
+- **M**: Pipeline diario genera `señales_diarias.csv` con z-score, ADF, régimen de volatilidad y alertas de ruptura de cointegración
+- **A**: Alpaca primario + yfinance fallback automático ante cualquier error (credenciales, red, paquete)
+- **R**: Operación continua independiente de la disponibilidad de Alpaca
+- **T**: Señales disponibles cada día hábil en la apertura del mercado
+
+### Objetivo 4 — Control desde Telegram ✓
+- **S**: `bot_telegram.py` — espejo completo del CLI accesible desde cualquier dispositivo
+- **M**: 9 comandos con respuesta en Markdown + envío automático de gráficos PNG
+- **A**: `python bot_telegram.py` + token de BotFather + chat_id personal en `.env`
+- **R**: Control total del sistema desde móvil sin acceso a terminal
+- **T**: Disponible 24/7 mientras el proceso Python esté en ejecución
