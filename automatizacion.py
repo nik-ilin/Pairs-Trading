@@ -172,11 +172,14 @@ def verificar_cointegración_activa(
     idx = s1.index.intersection(s2.index)
 
     ventana_barras = int(ventana * _bpd(df_close.index))
-    if len(idx) < ventana_barras:
+    # Tolerancia del 10% para cubrir festivos y fuentes con menos barras que el horario de Alpaca
+    min_barras = max(30, int(ventana_barras * 0.90))
+    if len(idx) < min_barras:
         return {"cointegrado": False, "alerta": "Datos insuficientes para verificar"}
 
-    s1_rec = np.log(s1.loc[idx].iloc[-ventana_barras:])
-    s2_rec = np.log(s2.loc[idx].iloc[-ventana:])
+    ventana_efectiva = min(ventana_barras, len(idx))
+    s1_rec = np.log(s1.loc[idx].iloc[-ventana_efectiva:])
+    s2_rec = np.log(s2.loc[idx].iloc[-ventana_efectiva:])
 
     try:
         _, pvalue, _ = coint(s1_rec, s2_rec)

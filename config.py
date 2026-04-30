@@ -6,9 +6,11 @@ Las API keys van en .env (nunca en este archivo).
 """
 
 import os
-from dotenv import load_dotenv
-
-load_dotenv()
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except ImportError:
+    print("[WARN] python-dotenv no instalado. Ejecuta: pip install python-dotenv")
 
 # ── Mercado ───────────────────────────────────────────────────────────────────
 MERCADO_ZONA_HORARIA = "America/New_York"
