@@ -115,6 +115,7 @@ El spread normalizado (z-score) mide cuántas desviaciones estándar se aleja el
 $$Z_t = \frac{S_t - \mu_{rolling}(S, \text{HL})}{\sigma_{rolling}(S, \text{HL})}$$
 
 **Reglas de entrada/salida:**
+
 Alarma de Entrada: Si la distancia entre las acciones es anormalmente grande, el sistema emite una orden de entrar al mercado.
 
 Alarma de Salida: Cuando las acciones vuelven a su distancia normal de equilibrio, el sistema cierra la operación y recoge el beneficio.
