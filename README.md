@@ -1,19 +1,20 @@
 # Sistema de Arbitraje Estadístico — Pairs Trading (2008–2026)
 
-Modelo cuantitativo de trading automatizado basado en la cointegración estadística entre pares de acciones del mercado estadounidense. El sistema detecta pares cointegrados, genera señales de entrada y salida, y valida la estrategia mediante backtesting riguroso con múltiples métricas de riesgo.
+Este proyecto presenta un modelo cuantitativo de trading automatizado  basado en la cointegración estadística entre pares de acciones del mercado estadounidense. El sistema detecta pares cointegrados, genera señales de entrada y salida, y valida la estrategia mediante backtesting riguroso con múltiples métricas de riesgo. 
 
 ---
 
 ## Tabla de contenidos
 
 1. [Descripción del proyecto](#descripción-del-proyecto)
-2. [Fundamentos matemáticos](#fundamentos-matemáticos)
-3. [Arquitectura del sistema](#arquitectura-del-sistema)
-4. [Instalación](#instalación)
-5. [Uso](#uso)
-6. [Métricas de evaluación](#métricas-de-evaluación)
-7. [Gráficos generados](#gráficos-generados)
-8. [Objetivos SMART](#objetivos-smart)
+2. [Alcance del proyecto](#alcance-del-proyecto)
+3. [Fundamentos matemáticos](#fundamentos-matemáticos)
+4. [Arquitectura del sistema](#arquitectura-del-sistema)
+5. [Instalación](#instalación)
+6. [Uso](#uso)
+7. [Métricas de evaluación](#métricas-de-evaluación)
+8. [Gráficos generados](#gráficos-generados)
+9. [Objetivos SMART](#objetivos-smart)
 
 ---
 
@@ -30,9 +31,17 @@ El sistema opera en dos fases:
 
 ---
 
+## Alcance del proyecto
+
+El alcance de este proyecto abarca el diseño, desarrollo y validación de una arquitectura de software automatizada en Python enfocada en el Pairs Trading. La herramienta busca identificar oportunidades de inversión aprovechando la relación histórica y la convergencia temporal entre activos. De esta forma, se pretende demostrar, mediante simulaciones, la viabilidad de obtener un beneficio económico consistente a través de un modelo matemático replicable; un sistema diseñado para adaptarse a los diferentes ciclos del mercado a largo plazo y maximizar la rentabilidad manteniendo un estricto control del riesgo.
+
+---
+
 ## Fundamentos matemáticos
 
 ### 1. Detección de cointegración
+
+No todas las empresas del mismo sector sirven. Nuestro sistema escanea miles de combinaciones en el índice S&P 500 y las somete a exámenes estadísticos (Tests de Engle-Granger y Johansen). Esto nos filtra el "ruido" y nos deja solo con aquellas parejas que tienen una unión matemática real y demostrable (ordenándolas de mejor a peor).
 
 #### Test de Engle-Granger (pre-filtro)
 Dado un par $(S_1, S_2)$, se ajusta la regresión:
@@ -51,6 +60,8 @@ Un score $> 1$ confirma la cointegración. Los pares se ordenan por score descen
 ---
 
 ### 2. Ratio de cobertura dinámico — Filtro de Kalman
+
+La relación entre dos empresas no es rígida; cambia con los ciclos económicos. Si usáramos un modelo estático, el sistema fallaría con el tiempo. Por ello usamos una herramienta avanzada llamada Filtro de Kalman. Esto permite que nuestro algoritmo aprenda y ajuste la "longitud de la goma elástica" día a día, adaptándose a los cambios del negocio de forma dinámica.
 
 El ratio de cobertura $\beta_t$ entre los dos activos no es constante en el tiempo. Un ratio estático (OLS) ignora cambios estructurales del negocio, rotaciones sectoriales y ciclos económicos.
 
@@ -71,6 +82,8 @@ El spread resultante es más estacionario que con OLS estático, lo que produce 
 ---
 
 ### 3. Proceso Ornstein-Uhlenbeck — Velocidad de reversión
+
+Una vez detectamos que dos acciones se han separado, el sistema calcula su "vida media".Esto es vital: no es lo mismo invertir en una pareja que tarda 5 días en corregirse que en una que tarda 60 días. Nuestro modelo usa este tiempo para ajustar automáticamente sus expectativas.
 
 El spread se modela como un proceso **Ornstein-Uhlenbeck (OU)**:
 
@@ -95,11 +108,16 @@ Esta vida media se usa automáticamente como ventana del z-score en lugar de un 
 
 ### 4. Z-score y señales de trading
 
+El sistema monitoriza el Spread en tiempo real. Para saber cuándo actuar, usamos una medida de anormalidad llamada Z-Score.
+
 El spread normalizado (z-score) mide cuántas desviaciones estándar se aleja el spread de su media rolling:
 
 $$Z_t = \frac{S_t - \mu_{rolling}(S, \text{HL})}{\sigma_{rolling}(S, \text{HL})}$$
 
 **Reglas de entrada/salida:**
+Alarma de Entrada: Si la distancia entre las acciones es anormalmente grande, el sistema emite una orden de entrar al mercado.
+Alarma de Salida: Cuando las acciones vuelven a su distancia normal de equilibrio, el sistema cierra la operación y recoge el beneficio.
+Stop-Loss: Si la distancia se vuelve extrema e irracional, asumimos que la relación de las empresas se ha roto para siempre y cortamos las pérdidas automáticamente.
 
 | Condición | Acción | Razonamiento |
 |---|---|---|
@@ -111,6 +129,9 @@ $$Z_t = \frac{S_t - \mu_{rolling}(S, \text{HL})}{\sigma_{rolling}(S, \text{HL})}
 ---
 
 ### 5. Dimensionado de posiciones — Volatility Scaling
+
+Un buen sistema de inversión no solo busca ganar, sino proteger el dinero. Nuestro algoritmo incluye un sistema de ajuste por volatilidad.
+Si el mercado está tranquilo, el sistema invierte un tamaño normal. Si el mercado está  inestable (alta volatilidad), el sistema reduce automáticamente la cantidad de dinero invertida. De esta forma, mantenemos el nivel de riesgo estrictamente controlado al 10% del capital por operación, pase lo que pase en el mundo exterior.
 
 El tamaño de cada posición se ajusta inversamente a la volatilidad rolling del spread:
 
