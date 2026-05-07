@@ -35,6 +35,7 @@ from deteccion import (
     cargar_pares,
     top_pares,
     estabilidad_rolling,
+    diagnostico_madurez_cointegracion,
 )
 from backtesting import (
     backtest_completo,
@@ -152,6 +153,38 @@ def _seleccionar_de_csv(top_n: int) -> list[dict]:
         return pares_df.to_dict("records")
 
 
+# ── Helpers de presentación ───────────────────────────────────────────────────
+
+_ICONO_MADUREZ = {
+    "RECIENTE":    "◈",
+    "CONSOLIDADA": "◉",
+    "MADURA":      "◎",
+    "AGOTADA":     "○",
+    "INESTABLE":   "◌",
+    "DESCONOCIDO": "?",
+}
+
+
+def _imprimir_madurez(madurez: dict) -> None:
+    """Bloque visual de diagnóstico de madurez de cointegración."""
+    estado = madurez.get("estado", "DESCONOCIDO")
+    if estado == "DESCONOCIDO":
+        return
+    icono   = _ICONO_MADUREZ.get(estado, "?")
+    score   = madurez.get("score_reciente", 0.0)
+    activa  = madurez.get("fraccion_activa", 0.0)
+    tend    = madurez.get("tendencia", "—")
+    desc    = madurez.get("descripcion", "")
+    ancho   = 56
+    print(f"  ┌{'─'*ancho}┐")
+    print(f"  │  {icono} MADUREZ: {estado:<10}  {tend:<12}{'':>{ancho-38}}│")
+    print(f"  │  Score reciente: {score:.2f}  |  Activa: {activa*100:.0f}% del período{'':>{ancho-52}}│")
+    print(f"  │  {desc[:ancho-2]:<{ancho-2}}│")
+    if len(desc) > ancho - 2:
+        print(f"  │  {desc[ancho-2:2*(ancho-2)]:<{ancho-2}}│")
+    print(f"  └{'─'*ancho}┘")
+
+
 # ── Modos de ejecución ────────────────────────────────────────────────────────
 
 def modo_scan(args) -> None:
@@ -183,7 +216,16 @@ def modo_diario(args) -> None:
     Ejecutar cada día en la apertura del mercado.
     """
     print("\n[MODO: DIARIO]")
-    df_señales = ejecutar_pipeline_diario(top_n=args.top_n, verbose=True)
+
+    pares_lista = None
+    if args.par:
+        pares_lista = [{"ticker1": args.par[0], "ticker2": args.par[1]}]
+    elif getattr(args, "interactivo", True):
+        pares_lista = _seleccionar_de_csv(args.top_n)
+        if not pares_lista:
+            return
+
+    df_señales = ejecutar_pipeline_diario(top_n=args.top_n, pares_lista=pares_lista, verbose=True)
     imprimir_resumen_diario(df_señales)
     if not df_señales.empty:
         estado = actualizar_estado(df_señales)
@@ -230,6 +272,9 @@ def modo_backtest(args) -> None:
         print(f"  {nombre}")
         print(f"{'─'*50}")
 
+        rolling = estabilidad_rolling(precios[[t1, t2]], t1, t2)
+        _imprimir_madurez(diagnostico_madurez_cointegracion(rolling))
+
         params = ParametrosBacktest()
         if args.optimizar:
             try:
@@ -256,34 +301,52 @@ def modo_backtest(args) -> None:
 
 
 def modo_evaluar(args) -> None:
-    """Genera gráficos de análisis completos para un par específico."""
+    """Genera gráficos de análisis completos para uno o más pares."""
     print("\n[MODO: EVALUAR]")
 
-    if not args.par:
-        print("[!] Indica un par con --par TICKER1 TICKER2")
-        return
+    if args.par:
+        pares_lista = [{"ticker1": args.par[0], "ticker2": args.par[1]}]
+    elif getattr(args, "interactivo", True):
+        pares_lista = _seleccionar_de_csv(args.top_n)
+        if not pares_lista:
+            return
+    else:
+        try:
+            pares_lista = top_pares(n=args.top_n).to_dict("records")
+        except FileNotFoundError:
+            print("[!] Ejecuta primero --modo scan.")
+            return
 
-    t1, t2 = args.par[0], args.par[1]
-    nombre = f"{t1}/{t2}"
+    tickers = list({t for p in pares_lista for t in (p["ticker1"], p["ticker2"])})
+    print(f"  Descargando datos para {len(tickers)} tickers...")
+    precios = descargar_precios_alpaca(tickers)
 
-    print(f"  Descargando datos para {nombre}...")
-    precios = descargar_precios_alpaca([t1, t2])
+    for fila in pares_lista:
+        t1, t2 = fila["ticker1"], fila["ticker2"]
+        nombre = f"{t1}/{t2}"
 
-    if t1 not in precios.columns or t2 not in precios.columns:
-        print(f"[!] Sin datos para {nombre}.")
-        return
+        if t1 not in precios.columns or t2 not in precios.columns:
+            print(f"[!] Sin datos para {nombre}.")
+            continue
 
-    params    = ParametrosBacktest()
-    resultado = backtest_completo(precios[[t1, t2]], t1, t2, params, imprimir_reporte=True)
+        print(f"\n{'─'*50}")
+        print(f"  {nombre}")
+        print(f"{'─'*50}")
 
-    try:
-        from evaluacion import generar_informe_completo, grafico_rolling_cointegracion
-        ohlcv   = descargar_ohlcv_horario([t1, t2], dias_atras=365)
-        rolling = estabilidad_rolling(ohlcv["close"], t1, t2)
-        grafico_rolling_cointegracion(rolling, nombre_par=nombre)
-        generar_informe_completo(resultado, nombre_par=nombre)
-    except ImportError:
-        print("  [WARN] evaluacion.py no disponible.")
+        rolling = estabilidad_rolling(precios[[t1, t2]], t1, t2)
+        _imprimir_madurez(diagnostico_madurez_cointegracion(rolling))
+
+        params    = ParametrosBacktest()
+        resultado = backtest_completo(precios[[t1, t2]], t1, t2, params, imprimir_reporte=True)
+
+        try:
+            from evaluacion import generar_informe_completo, grafico_rolling_cointegracion
+            ohlcv   = descargar_ohlcv_horario([t1, t2], dias_atras=365)
+            rolling = estabilidad_rolling(ohlcv["close"], t1, t2)
+            grafico_rolling_cointegracion(rolling, nombre_par=nombre)
+            generar_informe_completo(resultado, nombre_par=nombre)
+        except ImportError:
+            print("  [WARN] evaluacion.py no disponible.")
 
 
 def modo_full(args) -> None:

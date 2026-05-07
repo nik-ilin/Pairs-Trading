@@ -31,7 +31,10 @@ from spread import (
     generar_señales,
     Señal,
 )
-from deteccion import escanear_todos_los_pares, guardar_pares, cargar_pares, test_johansen
+from deteccion import (
+    escanear_todos_los_pares, guardar_pares, cargar_pares, test_johansen,
+    diagnostico_madurez_simple,
+)
 from config import (
     MIN_OBS_HORARIO, UMBRAL_EG, VENTANA_COINT_ACTIVA, HORAS_DIA,
 )
@@ -111,6 +114,11 @@ def ejecutar_scan_semanal(
     if df_close.empty:
         print("[ERROR] Sin datos horarios. Verifica las credenciales de Alpaca.")
         return pd.DataFrame()
+
+    # La caché puede contener más tickers que los solicitados — filtrar al universo pedido
+    tickers_validos = [t for t in tickers if t in df_close.columns]
+    if tickers_validos:
+        df_close = df_close[tickers_validos]
 
     pares = escanear_todos_los_pares(df_close, verbose=verbose)
 
@@ -281,6 +289,7 @@ def evaluar_par(
 
     adf     = test_adf_spread(spread.tail(ventana_ou))
     regimen = regimen_volatilidad(spread)
+    madurez = diagnostico_madurez_simple(df_close[t1], df_close[t2])
 
     mapa_señal = {
         Señal.COMPRAR_SPREAD: "LONG_SPREAD",
@@ -290,24 +299,27 @@ def evaluar_par(
     }
 
     return {
-        "par":            f"{t1}/{t2}",
-        "ticker1":        t1,
-        "ticker2":        t2,
-        "fecha":          str(df_close.index[-1]),
-        "señal":          mapa_señal.get(señal_hoy, "HOLD"),
-        "z_score":        round(z_actual, 4),
-        "beta_kalman":    round(beta_actual, 4),
-        "half_life_bars": round(hl, 1),
-        "window_zscore":  window,
-        "regimen_vol":    regimen,
-        "adf_p_value":    adf["p_value_adf"],
-        "spread_estac":   adf["estacionario"],
-        "coint_activa":   True,
-        "p_value_eg":     coint_ok["p_value_eg"],
-        "alerta":         "",
-        "precio_t1":      round(float(df_close[t1].iloc[-1]), 2),
-        "precio_t2":      round(float(df_close[t2].iloc[-1]), 2),
-        "spread_actual":  round(float(spread.iloc[-1]), 6),
+        "par":                f"{t1}/{t2}",
+        "ticker1":            t1,
+        "ticker2":            t2,
+        "fecha":              str(df_close.index[-1]),
+        "señal":              mapa_señal.get(señal_hoy, "HOLD"),
+        "z_score":            round(z_actual, 4),
+        "beta_kalman":        round(beta_actual, 4),
+        "half_life_bars":     round(hl, 1),
+        "window_zscore":      window,
+        "regimen_vol":        regimen,
+        "adf_p_value":        adf["p_value_adf"],
+        "spread_estac":       adf["estacionario"],
+        "coint_activa":       True,
+        "p_value_eg":         coint_ok["p_value_eg"],
+        "alerta":             "",
+        "precio_t1":          round(float(df_close[t1].iloc[-1]), 2),
+        "precio_t2":          round(float(df_close[t2].iloc[-1]), 2),
+        "spread_actual":      round(float(spread.iloc[-1]), 6),
+        "madurez_estado":     madurez["estado"],
+        "madurez_descripcion": madurez["descripcion"],
+        "madurez_tendencia":  madurez["tendencia"],
     }
 
 
@@ -315,12 +327,13 @@ def evaluar_par(
 
 def ejecutar_pipeline_diario(
     top_n: int = 20,
+    pares_lista: list[dict] | None = None,
     guardar: bool = True,
     verbose: bool = True,
 ) -> pd.DataFrame:
     """
     Pipeline diario completo:
-      1. Carga los pares del último scan semanal
+      1. Carga los pares del último scan semanal (o usa pares_lista si se pasa)
       2. Descarga datos horarios recientes (365 días)
       3. Verifica cointegración de pares con posición abierta
       4. Genera señales para todos los pares válidos
@@ -331,16 +344,19 @@ def ejecutar_pipeline_diario(
     if verbose:
         print(f"\n[PIPELINE DIARIO] {datetime.now().strftime('%Y-%m-%d %H:%M')}")
 
-    # Avisar si el scan está desactualizado (pero no bloqueamos)
-    dias = dias_desde_ultimo_scan()
-    if dias is None:
-        print("[WARN] No hay pares detectados. Ejecuta primero el scan semanal.")
-        return pd.DataFrame()
-    if dias > DIAS_ENTRE_SCANS and verbose:
-        print(f"[WARN] El scan tiene {dias} días de antigüedad. "
-              f"Considera ejecutar ejecutar_scan_semanal().")
+    if pares_lista is not None:
+        pares_df = pd.DataFrame(pares_lista)
+    else:
+        # Avisar si el scan está desactualizado (pero no bloqueamos)
+        dias = dias_desde_ultimo_scan()
+        if dias is None:
+            print("[WARN] No hay pares detectados. Ejecuta primero el scan semanal.")
+            return pd.DataFrame()
+        if dias > DIAS_ENTRE_SCANS and verbose:
+            print(f"[WARN] El scan tiene {dias} días de antigüedad. "
+                  f"Considera ejecutar ejecutar_scan_semanal().")
+        pares_df = cargar_pares().head(top_n)
 
-    pares_df = cargar_pares().head(top_n)
     tickers  = list(set(pares_df["ticker1"].tolist() + pares_df["ticker2"].tolist()))
 
     if verbose:
@@ -369,9 +385,10 @@ def ejecutar_pipeline_diario(
             if verbose:
                 icono = {"LONG_SPREAD": "▲", "SHORT_SPREAD": "▼", "CERRAR": "✕",
                          "HOLD": "—", "SUSPENDIDO": "⚠"}.get(resultado["señal"], "?")
+                madurez_tag = f"[{resultado.get('madurez_estado', '?')} {resultado.get('madurez_tendencia', '')}]"
                 print(f"  {icono} {t1}/{t2:8} | Z={resultado.get('z_score', 0):+.2f} | "
                       f"{resultado['señal']:12} | "
-                      f"{'✓' if resultado.get('coint_activa') else '✗ RUPTURA'}")
+                      f"{'✓' if resultado.get('coint_activa') else '✗ RUPTURA'} | {madurez_tag}")
         except Exception as e:
             if verbose:
                 print(f"  [ERR] {t1}/{t2}: {e}")
@@ -453,6 +470,9 @@ def imprimir_resumen_diario(df_señales: pd.DataFrame) -> None:
         for _, r in activas.iterrows():
             print(f"    {r['señal']:12} | {r['par']:12} | Z={r['z_score']:+.2f} | "
                   f"HL={r['half_life_bars']:.0f}b | Vol={r['regimen_vol']}")
+            if "madurez_estado" in r and r["madurez_estado"] != "DESCONOCIDO":
+                print(f"    {'':12}   Cointegración: {r['madurez_estado']} {r.get('madurez_tendencia', '')}")
+                print(f"    {'':12}   {r['madurez_descripcion']}")
 
     if not suspendidas.empty:
         print(f"\n  ALERTAS:")

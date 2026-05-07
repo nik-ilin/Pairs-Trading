@@ -562,7 +562,8 @@ def _ohlcv_yfinance_cached(
         faltantes = [t for t in tickers if t not in cached["close"].columns]
         if not faltantes:
             print(f"[CACHÉ] OHLCV yfinance desde caché")
-            return cached
+            disponibles = [t for t in tickers if t in cached["close"].columns]
+            return {c: df[disponibles] for c, df in cached.items()}
 
     # Buffer de 30 días extra para cubrir festivos: 365 días calendario ≈ 251 hábiles sin buffer
     inicio = (datetime.now() - timedelta(days=dias_atras + 30)).strftime("%Y-%m-%d")

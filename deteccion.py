@@ -176,6 +176,161 @@ def escanear_todos_los_pares(
     )
 
 
+# ── Diagnóstico de madurez de cointegración ──────────────────────────────────
+
+def diagnostico_madurez_cointegracion(rolling_df: pd.DataFrame) -> dict:
+    """
+    Diagnostica la madurez de una cointegración a partir del histórico rolling
+    de scores Johansen (salida de estabilidad_rolling).
+
+    Compara el score del último cuarto del período con el inicial y calcula
+    qué fracción del tiempo el par estuvo cointegrado.
+
+    Estados:
+      RECIENTE    — relación nueva y en ascenso: ventana óptima de entrada
+      CONSOLIDADA — relación robusta y estable a lo largo del histórico
+      MADURA      — larga historia pero score en declive: vigilar ruptura
+      AGOTADA     — relación estadística deteriorada: no operar
+      INESTABLE   — cointegración débil o intermitente: precaución
+    """
+    if rolling_df.empty or len(rolling_df) < 10:
+        return {
+            "estado": "DESCONOCIDO",
+            "descripcion": "Datos de estabilidad rolling insuficientes.",
+            "score_reciente": 0.0,
+            "fraccion_activa": 0.0,
+            "tendencia": "—",
+        }
+
+    n      = len(rolling_df)
+    n_q    = max(5, n // 4)
+    scores = rolling_df["score"]
+
+    score_inicial    = float(scores.iloc[:n_q].mean())
+    score_rec_medio  = float(scores.iloc[-n_q:].mean())
+    score_hist_medio = float(scores.iloc[:-n_q].mean()) if n > n_q else score_inicial
+    fraccion_activa  = float((scores > 1.0).mean())
+    fraccion_hist    = float((scores.iloc[:-n_q] > 1.0).mean()) if n > n_q else 0.0
+
+    diff = score_rec_medio - score_inicial
+    if diff > 0.10:
+        tendencia = "↑ subiendo"
+    elif diff < -0.10:
+        tendencia = "↓ bajando"
+    else:
+        tendencia = "→ estable"
+
+    if score_rec_medio < 0.85 and fraccion_hist >= 0.30:
+        estado = "AGOTADA"
+        descripcion = (
+            "Cointegración debilitada — la relación estadística que existía se ha deteriorado "
+            "significativamente. No iniciar nuevas posiciones; cerrar las abiertas si procede."
+        )
+    elif fraccion_hist < 0.40 and score_rec_medio >= 1.10 and diff > 0:
+        estado = "RECIENTE"
+        descripcion = (
+            "Cointegración emergente — la relación estadística es nueva y está ganando fuerza. "
+            "Ventana óptima para iniciar el seguimiento con tamaño de posición reducido."
+        )
+    elif fraccion_activa >= 0.60 and score_rec_medio >= 1.05 and score_rec_medio >= score_hist_medio * 0.88:
+        estado = "CONSOLIDADA"
+        descripcion = (
+            "Cointegración consolidada — relación robusta y estable a lo largo del histórico. "
+            "Alta confianza estadística. Condiciones óptimas para operar."
+        )
+    elif fraccion_activa >= 0.45 and score_rec_medio < score_hist_medio * 0.85:
+        estado = "MADURA"
+        descripcion = (
+            "Cointegración madura — larga historia pero el score está en declive. "
+            "Probabilidad de ruptura moderada. Reducir tamaño de posición y vigilar de cerca."
+        )
+    else:
+        estado = "INESTABLE"
+        descripcion = (
+            "Cointegración intermitente — la relación estadística es débil o poco estable en el tiempo. "
+            "Operar con precaución y reducir el tamaño de posición."
+        )
+
+    return {
+        "estado":          estado,
+        "descripcion":     descripcion,
+        "score_reciente":  round(score_rec_medio, 4),
+        "fraccion_activa": round(fraccion_activa, 3),
+        "tendencia":       tendencia,
+    }
+
+
+def diagnostico_madurez_simple(s1: pd.Series, s2: pd.Series) -> dict:
+    """
+    Diagnóstico rápido de madurez sin rolling Johansen completo.
+    Divide el histórico en tres tercios y compara los p-values de EG entre períodos.
+    Diseñado para el pipeline diario donde el rendimiento es crítico.
+    """
+    idx = s1.dropna().index.intersection(s2.dropna().index)
+    n   = len(idx)
+
+    if n < 90:
+        return {
+            "estado":          "DESCONOCIDO",
+            "descripcion":     "Datos insuficientes para diagnóstico de madurez.",
+            "fraccion_activa": 0.0,
+            "tendencia":       "—",
+        }
+
+    tercio       = n // 3
+    p_temprano   = test_engle_granger(s1.loc[idx[:tercio]],         s2.loc[idx[:tercio]])["p_value_eg"]
+    p_intermedio = test_engle_granger(s1.loc[idx[tercio:2*tercio]], s2.loc[idx[tercio:2*tercio]])["p_value_eg"]
+    p_reciente   = test_engle_granger(s1.loc[idx[2*tercio:]],       s2.loc[idx[2*tercio:]])["p_value_eg"]
+
+    n_coints = sum(p < UMBRAL_EG for p in [p_temprano, p_intermedio, p_reciente])
+    fraccion  = n_coints / 3.0
+
+    if p_reciente < p_temprano * 0.6:
+        tendencia = "↑ subiendo"
+    elif p_reciente > p_temprano * 1.6:
+        tendencia = "↓ bajando"
+    else:
+        tendencia = "→ estable"
+
+    if p_temprano < UMBRAL_EG and p_reciente > 0.10:
+        estado = "AGOTADA"
+        descripcion = (
+            "Cointegración debilitada — la relación estadística que existía se ha deteriorado. "
+            "No iniciar nuevas posiciones; cerrar las abiertas si procede."
+        )
+    elif p_temprano > 0.10 and p_reciente < UMBRAL_EG:
+        estado = "RECIENTE"
+        descripcion = (
+            "Cointegración emergente — la relación estadística es nueva. "
+            "Ventana óptima para iniciar el seguimiento con tamaño de posición reducido."
+        )
+    elif n_coints == 3 and p_reciente < 0.03:
+        estado = "CONSOLIDADA"
+        descripcion = (
+            "Cointegración consolidada — relación robusta y estable a lo largo del histórico. "
+            "Alta confianza estadística. Condiciones óptimas para operar."
+        )
+    elif p_temprano < UMBRAL_EG and p_intermedio < UMBRAL_EG and p_reciente >= 0.04:
+        estado = "MADURA"
+        descripcion = (
+            "Cointegración madura — larga historia pero señales de debilitamiento reciente. "
+            "Reducir tamaño de posición y vigilar de cerca."
+        )
+    else:
+        estado = "INESTABLE"
+        descripcion = (
+            "Cointegración intermitente — la relación estadística es débil o poco estable. "
+            "Operar con precaución."
+        )
+
+    return {
+        "estado":          estado,
+        "descripcion":     descripcion,
+        "fraccion_activa": round(fraccion, 3),
+        "tendencia":       tendencia,
+    }
+
+
 # ── Estabilidad rolling para gráficos (evaluacion.py) ─────────────────────────
 
 def estabilidad_rolling(
