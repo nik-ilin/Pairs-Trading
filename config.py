@@ -97,3 +97,8 @@ TASA_LIBRE_RIESGO = 0.0            # tasa libre de riesgo anual (0 = efectivo)
 VAR_NIVEL         = 0.05           # nivel de confianza para VaR/CVaR (5%)
 OBJETIVO_SHARPE   = 1.0            # objetivo mínimo de Sharpe Ratio
 OBJETIVO_MDD      = -0.15          # objetivo máximo de drawdown (-15%)
+
+# ── Gemini AI Analyst ─────────────────────────────────────────────────────────
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
+GEMINI_MODEL   = "gemini-2.5-flash"
+GEMINI_ACTIVO  = bool(GEMINI_API_KEY)

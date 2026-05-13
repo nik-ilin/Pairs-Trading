@@ -32,6 +32,7 @@ from telegram.constants import ParseMode
 from telegram.ext import Application, CommandHandler, ContextTypes
 
 from config import TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID
+from analista_ia import analizar_backtest, analizar_señales
 
 logging.basicConfig(
     format="%(asctime)s — %(name)s — %(levelname)s — %(message)s",
@@ -295,6 +296,26 @@ async def cmd_diario(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
             _truncar("\n".join(lineas)), parse_mode=ParseMode.MARKDOWN
         )
 
+        # ── Análisis IA (solo si hay señales accionables) ────────
+        if not activas.empty or not cerrar.empty:
+            try:
+                fecha_hoy = datetime.today().strftime("%Y-%m-%d")
+                narrativa = await asyncio.to_thread(
+                    analizar_señales, df, fecha_hoy
+                )
+                if narrativa:
+                    ia_msg = (
+                        "━━━━━━━━━━━━━━━━━━━━━━\n"
+                        "🤖 <b>Contexto de las señales</b>\n\n"
+                        f"{narrativa}\n\n"
+                        f"<i>Gemini 2.0 Flash · {fecha_hoy}</i>"
+                    )
+                    await update.message.reply_text(
+                        ia_msg, parse_mode=ParseMode.HTML
+                    )
+            except Exception:
+                pass
+
     except Exception as e:
         logger.exception("Error en cmd_diario")
         await msg.edit_text(f"❌ Error en pipeline diario:\n`{e}`", parse_mode=ParseMode.MARKDOWN)
@@ -342,25 +363,43 @@ async def cmd_backtest(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
             return
 
         m      = resultado["metricas"]
-        sharpe = m.get("sharpe_ratio")
-        mdd    = m.get("max_drawdown")
+        sharpe = m.get("sharpe")
+        mdd    = m.get("mdd")
 
         texto = (
             f"📈 *Backtest {t1}/{t2}* (2020–hoy)\n\n"
             f"{_ok(sharpe and sharpe > 1.0)} Sharpe Ratio:    `{_fmt(sharpe)}`  _(objetivo >1.0)_\n"
-            f"{_ok(mdd and abs(mdd) < 0.15)} Max Drawdown:   `{_fmt(mdd, pct=True)}`  _(objetivo <15%)_\n\n"
-            f"📊 CAGR:          `{_fmt(m.get('cagr'), pct=True)}`\n"
-            f"📊 Sortino:       `{_fmt(m.get('sortino_ratio'))}`\n"
-            f"📊 Calmar:        `{_fmt(m.get('calmar_ratio'))}`\n"
-            f"📊 Omega:         `{_fmt(m.get('omega_ratio'))}`\n"
+            f"{_ok(mdd and abs(mdd) < 15.0)} Max Drawdown:   `{_fmt(mdd)}%`  _(objetivo <15%)_\n\n"
+            f"📊 CAGR:          `{_fmt(m.get('cagr'))}%`\n"
+            f"📊 Sortino:       `{_fmt(m.get('sortino'))}`\n"
+            f"📊 Calmar:        `{_fmt(m.get('calmar'))}`\n"
             f"📊 Profit Factor: `{_fmt(m.get('profit_factor'))}`\n"
             f"📊 Trades:        `{m.get('n_trades', 'N/A')}`\n"
-            f"📊 Win Rate:      `{_fmt(m.get('win_rate'), pct=True)}`\n"
-            f"📊 VaR 95%:       `{_fmt(m.get('var_95'), pct=True)}`\n"
-            f"📊 CVaR 95%:      `{_fmt(m.get('cvar_95'), pct=True)}`\n\n"
+            f"📊 Win Rate:      `{_fmt(m.get('win_rate'))}%`\n"
+            f"📊 VaR 95%:       `{_fmt(m.get('var_95'))}%`\n"
+            f"📊 CVaR 95%:      `{_fmt(m.get('cvar_95'))}%`\n\n"
             f"_Para gráficos completos usa `/evaluar {t1} {t2}`_"
         )
         await msg.edit_text(texto, parse_mode=ParseMode.MARKDOWN)
+
+        # ── Análisis IA ──────────────────────────────────────────
+        try:
+            narrativa = await asyncio.to_thread(
+                analizar_backtest, resultado, t1, t2
+            )
+            if narrativa:
+                fecha_str = datetime.today().strftime("%d/%m/%Y")
+                ia_msg = (
+                    "━━━━━━━━━━━━━━━━━━━━━━\n"
+                    "🤖 <b>Análisis del sistema</b>\n\n"
+                    f"{narrativa}\n\n"
+                    f"<i>Gemini 2.0 Flash · {fecha_str}</i>"
+                )
+                await update.message.reply_text(
+                    ia_msg, parse_mode=ParseMode.HTML
+                )
+        except Exception:
+            pass   # La narrativa IA es opcional — nunca bloquea
 
     except Exception as e:
         logger.exception("Error en cmd_backtest")
@@ -419,8 +458,8 @@ async def cmd_evaluar(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
             return
 
         m      = resultado["metricas"]
-        sharpe = m.get("sharpe_ratio")
-        mdd    = m.get("max_drawdown")
+        sharpe = m.get("sharpe")
+        mdd    = m.get("mdd")
         cagr   = m.get("cagr")
 
         # Buscar los PNGs generados: naming es XX_tipo_T1_T2.png
@@ -431,9 +470,9 @@ async def cmd_evaluar(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         resumen = (
             f"📈 *{nombre}* — Informe completo generado\n\n"
             f"{_ok(sharpe and sharpe > 1.0)} Sharpe: `{_fmt(sharpe)}`  |  "
-            f"{_ok(mdd and abs(mdd) < 0.15)} MDD: `{_fmt(mdd, pct=True)}`\n"
-            f"📊 CAGR: `{_fmt(cagr, pct=True)}` | Trades: `{m.get('n_trades', 'N/A')}` | "
-            f"Win Rate: `{_fmt(m.get('win_rate'), pct=True)}`\n\n"
+            f"{_ok(mdd and abs(mdd) < 15.0)} MDD: `{_fmt(mdd)}%`\n"
+            f"📊 CAGR: `{_fmt(cagr)}%` | Trades: `{m.get('n_trades', 'N/A')}` | "
+            f"Win Rate: `{_fmt(m.get('win_rate'))}%`\n\n"
             f"_Enviando {len(pngs)} gráficos..._"
         )
         await msg.edit_text(resumen, parse_mode=ParseMode.MARKDOWN)
@@ -441,6 +480,25 @@ async def cmd_evaluar(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         for png in pngs:
             with open(png, "rb") as f:
                 await update.message.reply_photo(photo=f, caption=png.stem.replace("_", " "))
+
+        # ── Análisis IA ──────────────────────────────────────────
+        try:
+            narrativa = await asyncio.to_thread(
+                analizar_backtest, resultado, t1, t2
+            )
+            if narrativa:
+                fecha_str = datetime.today().strftime("%d/%m/%Y")
+                ia_msg = (
+                    "━━━━━━━━━━━━━━━━━━━━━━\n"
+                    "🤖 <b>Análisis del sistema</b>\n\n"
+                    f"{narrativa}\n\n"
+                    f"<i>Gemini 2.0 Flash · {fecha_str}</i>"
+                )
+                await update.message.reply_text(
+                    ia_msg, parse_mode=ParseMode.HTML
+                )
+        except Exception:
+            pass   # La narrativa IA es opcional — nunca bloquea
 
     except Exception as e:
         logger.exception("Error en cmd_evaluar")

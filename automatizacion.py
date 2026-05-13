@@ -39,6 +39,7 @@ from config import (
     MIN_OBS_HORARIO, UMBRAL_EG, VENTANA_COINT_ACTIVA, HORAS_DIA,
     TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID,
 )
+from analista_ia import analizar_señales
 
 
 def notificar_telegram(mensaje: str, html: bool = True) -> None:
@@ -553,3 +554,19 @@ def _push_resumen_telegram(
             lineas.append(f"  <code>{r['par']}</code> — {r.get('alerta', '?')}")
 
     notificar_telegram("\n".join(lineas), html=True)
+
+    # ── Análisis IA proactivo ─────────────────────────────────
+    try:
+        from config import GEMINI_ACTIVO
+        if GEMINI_ACTIVO and (not activas.empty or not cierres.empty):
+            fecha_hoy = datetime.today().strftime("%Y-%m-%d")
+            narrativa = analizar_señales(df_señales, fecha_hoy)
+            if narrativa:
+                ia_push = (
+                    "<b>🤖 Contexto del analista IA</b>\n\n"
+                    f"{narrativa}\n\n"
+                    f"<i>Gemini 2.0 Flash · {fecha_hoy}</i>"
+                )
+                notificar_telegram(ia_push, html=True)
+    except Exception as e:
+        print(f"[GeminiAI] Push automático falló: {e}")
