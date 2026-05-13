@@ -50,65 +50,54 @@ def kalman_hedge_ratio(
     x: pd.Series,
     delta: float = KALMAN_DELTA,
     var_obs: float = KALMAN_VAR_OBS,
-) -> tuple[pd.Series, pd.Series]:
+) -> pd.Series:
     """
-    Estima el ratio de cobertura (beta) e intercepto (alpha) dinámicos
-    mediante el Filtro de Kalman.
+    Estima el ratio de cobertura (beta) dinámico mediante el Filtro de Kalman.
+    Estado 1D: solo beta. El z-score rolling se encarga del centrado.
 
     Modelo de espacio de estados:
-      Estado:       θ_t = [beta_t, alpha_t]  — paseo aleatorio
-      Observación:  y_t = x_t * beta_t + alpha_t + ε_t
+      Estado:       θ_t = beta_t  — paseo aleatorio
+      Observación:  y_t = x_t * beta_t + ε_t
 
     Parámetros:
       delta   : velocidad de adaptación del estado (mayor = más reactivo)
       var_obs : varianza del ruido de observación
 
     Devuelve:
-      beta_series  : Serie de ratios de cobertura dinámicos
-      alpha_series : Serie de interceptos dinámicos
+      beta_series : Serie de ratios de cobertura dinámicos
     """
     n = len(y)
     y_arr = y.values
     x_arr = x.values
 
-    # Ruido del proceso (covarianza de transición del estado)
-    Vw = (delta / (1.0 - delta)) * np.eye(2)
+    Vw = delta / (1.0 - delta)  # escalar
     Ve = var_obs
 
-    # Inicialización
-    theta = np.zeros((n, 2))   # [beta, alpha]
-    P     = np.zeros((n, 2, 2))
-    P[0]  = np.eye(2) * 1.0
+    theta = np.zeros(n)   # solo beta
+    P     = np.ones(n)    # varianza escalar
+    P[0]  = 1.0
 
-    # Warmup: 60 días de negociación independientemente de la frecuencia
+    # Warmup: OLS sobre los primeros 60 días de negociación
     warmup = int(60 * _bpd(y.index))
     if n >= warmup:
-        X0 = add_constant(x_arr[:warmup])
-        ols = OLS(y_arr[:warmup], X0).fit()
-        theta[0] = [ols.params[1], ols.params[0]]
+        ols = OLS(y_arr[:warmup], x_arr[:warmup]).fit()
+        theta[0] = float(ols.params[0])
 
     for t in range(1, n):
-        # Predicción
         theta_pred = theta[t - 1]
         P_pred     = P[t - 1] + Vw
 
-        # Vector de observación: F = [x_t, 1]
-        F = np.array([x_arr[t], 1.0])
+        F = x_arr[t]  # escalar
 
-        # Innovación y varianza de la innovación
-        innovacion = y_arr[t] - F @ theta_pred
-        S          = F @ P_pred @ F + Ve
+        innovacion = y_arr[t] - F * theta_pred
+        S          = F * P_pred * F + Ve
 
-        # Ganancia de Kalman
-        K = P_pred @ F / S
+        K = P_pred * F / S
 
-        # Actualización
         theta[t] = theta_pred + K * innovacion
-        P[t]     = (np.eye(2) - np.outer(K, F)) @ P_pred
+        P[t]     = (1.0 - K * F) * P_pred
 
-    beta_series  = pd.Series(theta[:, 0], index=y.index, name="beta_kalman")
-    alpha_series = pd.Series(theta[:, 1], index=y.index, name="alpha_kalman")
-    return beta_series, alpha_series
+    return pd.Series(theta, index=y.index, name="beta_kalman")
 
 
 # ── Proceso Ornstein-Uhlenbeck — half-life de reversión ──────────────────────
@@ -170,22 +159,21 @@ def calcular_spread_kalman(
     t1: str,
     t2: str,
     usar_log: bool = True,
-) -> tuple[pd.Series, pd.Series, pd.Series]:
+) -> tuple[pd.Series, pd.Series]:
     """
     Calcula el spread usando el Filtro de Kalman para el ratio dinámico.
 
     Devuelve:
-      spread      : serie del spread diario
+      spread      : serie del spread (s1 - beta * s2)
       beta_series : ratio de cobertura dinámico
-      alpha_series: intercepto dinámico
     """
     s1 = np.log(precios[t1]) if usar_log else precios[t1]
     s2 = np.log(precios[t2]) if usar_log else precios[t2]
 
-    beta, alpha = kalman_hedge_ratio(s1, s2)
-    spread      = s1 - beta * s2 - alpha
+    beta   = kalman_hedge_ratio(s1, s2)
+    spread = s1 - beta * s2
 
-    return spread, beta, alpha
+    return spread, beta
 
 
 def calcular_zscore(spread: pd.Series, window: int | None = None) -> pd.Series:
@@ -283,7 +271,9 @@ def tamaño_posicion_volatilidad(
     """
     if ventana_vol is None:
         ventana_vol = max(5, int(VENTANA_VOL * _bpd(spread.index)))
-    vol    = spread.rolling(ventana_vol).std()
-    vol    = vol.replace(0, np.nan).ffill().bfill()
-    tamaño = (capital * fraccion) / vol
+    vol      = spread.rolling(ventana_vol).std()
+    vol      = vol.replace(0, np.nan).ffill()
+    fallback = spread.std()
+    vol      = vol.fillna(fallback if fallback > 0 else 1.0)
+    tamaño   = (capital * fraccion) / vol
     return tamaño.rename("tamaño_posicion")

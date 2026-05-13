@@ -39,7 +39,7 @@ from config import (
     PERM_N, PERM_SEMILLA,
     WF_ANOS_DETECCION, WF_ANOS_OPERACION,
     GRID_ENTRADA_Z, GRID_SALIDA_Z, GRID_WINDOW,
-    MIN_OBS,
+    MIN_OBS, HL_MAX_DIAS, UMBRAL_EG,
 )
 
 warnings.filterwarnings("ignore")
@@ -91,12 +91,14 @@ class MotorBacktest:
         p = self.params
 
         # 1. Calcular spread con Kalman
-        spread, beta, alpha = calcular_spread_kalman(
+        spread, beta = calcular_spread_kalman(
             self.precios, self.t1, self.t2, usar_log=p.usar_log
         )
 
         # 2. Half-life OU para la ventana del z-score
-        hl     = calcular_half_life(spread)
+        hl = calcular_half_life(spread)
+        if not np.isfinite(hl):
+            hl = float(HL_MAX_DIAS)
         window = p.window_zscore or max(5, int(np.ceil(hl)))
 
         # 3. Z-score y señales
@@ -244,7 +246,7 @@ def walk_forward(
             (precios.index >= f_fin_det) & (precios.index < f_fin_op)
         ]
 
-        if len(oos) < MIN_OBS:
+        if len(oos) < 50:
             año_actual += 1
             continue
 
@@ -454,6 +456,353 @@ def test_permutaciones(
         "sharpe_nulo_medio": round(float(np.mean(sharpes_nulos)), 3),
         "p_value":           round(p_value, 4),
         "significativo":     p_value < 0.05,
+    }
+
+
+# ── Paper Trading Histórico con detección dinámica de régimen ────────────────
+
+def _imprimir_reporte_paper(
+    metricas: dict,
+    periodos: list[tuple],
+    df_trades: pd.DataFrame,
+    fecha_inicio: str,
+    fecha_fin: str,
+) -> None:
+    """Reporte visual del paper trading histórico."""
+    m     = metricas
+    ancho = 62
+
+    print(f"\n{'='*ancho}")
+    print(f"  PAPER TRADING HISTÓRICO — {m['par']}")
+    print(f"{'='*ancho}")
+    print(f"  Período analizado    : {fecha_inicio} → {fecha_fin}")
+    print(f"  Half-life estimado   : {m['half_life']:.1f} barras")
+    print(f"  Ventana z-score      : {m['window_usado']} barras")
+    print()
+
+    print(f"  PERÍODOS COINTEGRADOS ({m['n_periodos']} detectados):")
+    if periodos:
+        for i, (ini, fin) in enumerate(periodos, 1):
+            dias = (fin - ini).days
+            print(f"    {i}. {str(ini)[:10]} → {str(fin)[:10]}  ({dias} días)")
+    else:
+        print(f"    (ninguno confirmado en el período)")
+    print(f"  Tiempo operando: {m['dias_activos']} días "
+          f"({m['pct_tiempo_activo']:.1f}% del histórico)")
+
+    print(f"\n  {'─'*58}")
+    print(f"  {'MÉTRICAS':30}  {'PAPER':>10}  {'NAIVE':>10}")
+    print(f"  {'─'*58}")
+    print(f"  {'Trades totales':30}  {m['n_trades']:>10}  {m['n_trades_naive']:>10}")
+    print(f"  {'Win rate (%)':30}  {m['win_rate']:>10.1f}  {m['win_rate_naive']:>10.1f}")
+    print(f"  {'Profit factor':30}  {m['profit_factor']:>10.3f}  {m['profit_factor_naive']:>10.3f}")
+    print(f"  {'CAGR (%)':30}  {m['cagr']:>+10.2f}  {m['cagr_naive']:>+10.2f}")
+    print(f"  {'Sharpe':30}  {m['sharpe']:>10.3f}  {m['sharpe_naive']:>10.3f}")
+    print(f"  {'Sortino':30}  {m['sortino']:>10.3f}  {m['sortino_naive']:>10.3f}")
+    print(f"  {'Max Drawdown (%)':30}  {m['mdd']:>10.2f}  {m['mdd_naive']:>10.2f}")
+    print(f"  {'─'*58}")
+
+    if not df_trades.empty:
+        print(f"\n  TRADES ({len(df_trades)} total):")
+        print(f"  {'Entrada':<12} {'Salida':<12} {'Dir':<6} {'PnL':>9} {'Días':>5}  Cierre")
+        print(f"  {'─'*60}")
+        for _, r in df_trades.iterrows():
+            pnl_str = f"${r['pnl']:>+,.0f}"
+            print(f"  {str(r['fecha_entrada'])[:10]:<12} "
+                  f"{str(r['fecha_salida'])[:10]:<12} "
+                  f"{r['direccion']:<6} "
+                  f"{pnl_str:>9} "
+                  f"{r['duracion_dias']:>5}  "
+                  f"{r['cierre_por']}")
+
+    capital_final = m['capital_final']
+    ganancia      = capital_final - m['capital_inicial']
+    print(f"\n  Capital inicial : ${m['capital_inicial']:>12,.0f}")
+    print(f"  Capital final   : ${capital_final:>12,.0f}")
+    print(f"  Ganancia neta   : ${ganancia:>+12,.0f}  ({ganancia/m['capital_inicial']*100:+.1f}%)")
+    print(f"{'='*ancho}\n")
+
+
+def paper_trading_historico(
+    precios: pd.DataFrame,
+    ticker1: str,
+    ticker2: str,
+    params: ParametrosBacktest | None = None,
+    ventana_coint: int = 126,
+    n_confirmar: int = 4,
+    n_romper: int = 2,
+    freq_check: int = 5,
+    verbose: bool = True,
+) -> dict:
+    """
+    Simulación de paper trading usando detección dinámica del régimen de cointegración.
+
+    A diferencia del backtest estándar (que opera siempre), este modo:
+      1. Solo activa el trading cuando N tests EG consecutivos confirman cointegración
+         → evita operar en falsas alarmas al exigir estabilidad temporal
+      2. Cierra la posición y pausa cuando M tests consecutivos detectan ruptura
+      3. Reanuda automáticamente si la cointegración se reestablece
+
+    Parámetros de régimen:
+      ventana_coint : barras para cada test EG rolling (default 126 ≈ 6 meses diarios)
+      n_confirmar   : checks consecutivos para ACTIVAR el trading (default 4 ≈ 1 mes)
+      n_romper      : checks consecutivos para SUSPENDER el trading (default 2 ≈ 2 semanas)
+      freq_check    : frecuencia del test EG en barras (default 5 = semanal)
+
+    Returns el mismo dict que backtest_completo() más:
+      "regimen"          : Series bool — True cuando el par está activo
+      "periodos_activos" : lista de tuplas (fecha_inicio, fecha_fin) por período
+    """
+    from deteccion import test_engle_granger
+
+    p       = params or ParametrosBacktest()
+    precios = precios[[ticker1, ticker2]].dropna()
+    n       = len(precios)
+
+    if n < ventana_coint + freq_check * n_confirmar:
+        raise ValueError(
+            f"Datos insuficientes: {n} barras. Se necesitan al menos "
+            f"{ventana_coint + freq_check * n_confirmar} para la detección de régimen."
+        )
+
+    # ── 1. Kalman continuo sobre todo el histórico ────────────────────────────
+    spread, beta = calcular_spread_kalman(precios, ticker1, ticker2, usar_log=p.usar_log)
+
+    hl = calcular_half_life(spread)
+    if not np.isfinite(hl):
+        hl = float(HL_MAX_DIAS)
+    window  = p.window_zscore or max(5, int(np.ceil(hl)))
+    zscore  = calcular_zscore(spread, window=window)
+    tamaños = tamaño_posicion_volatilidad(spread, p.capital, fraccion=p.fraccion_riesgo)
+
+    # ── 2. Detección de régimen: EG rolling cada freq_check barras ───────────
+    regime         = np.zeros(n, dtype=bool)
+    n_conf_consec  = 0
+    n_break_consec = 0
+    activo         = False
+
+    for i in range(ventana_coint, n, freq_check):
+        idx_win = precios.index[i - ventana_coint : i]
+        s1_win  = np.log(precios[ticker1].loc[idx_win])
+        s2_win  = np.log(precios[ticker2].loc[idx_win])
+        p_val   = test_engle_granger(s1_win, s2_win)["p_value_eg"]
+
+        if p_val < UMBRAL_EG:
+            n_conf_consec  += 1
+            n_break_consec  = 0
+            if not activo and n_conf_consec >= n_confirmar:
+                activo = True
+        else:
+            n_break_consec += 1
+            n_conf_consec   = 0
+            if activo and n_break_consec >= n_romper:
+                activo = False
+
+        fin_bloque           = min(i + freq_check, n)
+        regime[i:fin_bloque] = activo
+
+    # ── 3. Simulación de trades (solo durante régimen activo) ─────────────────
+    coste_total      = (p.slippage + p.comision) * 2
+    retornos_diarios = pd.Series(0.0, index=precios.index, name="retorno")
+    trades           = []
+    posicion_actual  = 0
+    precio_entrada   = None
+    fecha_entrada    = None
+    tam_entrada      = 0.0
+
+    ret_t1 = precios[ticker1].pct_change()
+    ret_t2 = precios[ticker2].pct_change()
+
+    for i in range(n):
+        fecha       = precios.index[i]
+        z           = zscore.iloc[i]
+        b           = beta.iloc[i]
+        tam         = tamaños.iloc[i] if not np.isnan(tamaños.iloc[i]) else tam_entrada
+        en_regimen  = bool(regime[i])
+
+        # PnL diario de posición abierta (independiente del régimen)
+        if posicion_actual != 0:
+            r1 = ret_t1.iloc[i]
+            r2 = ret_t2.iloc[i]
+            rd = (r1 - b * r2) if posicion_actual == Señal.COMPRAR_SPREAD else (-r1 + b * r2)
+            retornos_diarios.iloc[i] = rd * tam_entrada / p.capital
+
+        if np.isnan(z):
+            continue
+
+        # Cierre forzado al perder el régimen
+        if posicion_actual != 0 and not en_regimen:
+            pnl = (spread.iloc[i] - precio_entrada) * posicion_actual * tam_entrada
+            trades.append({
+                "fecha_entrada": fecha_entrada,
+                "fecha_salida":  fecha,
+                "direccion":     "LONG" if posicion_actual == 1 else "SHORT",
+                "z_entrada":     float(zscore.loc[fecha_entrada]),
+                "z_salida":      float(z),
+                "pnl":           float(pnl),
+                "duracion_dias": (fecha - fecha_entrada).days,
+                "cierre_por":    "RUPTURA_COINT",
+            })
+            retornos_diarios.iloc[i] -= coste_total * tam_entrada / p.capital
+            posicion_actual = 0
+            precio_entrada  = None
+            tam_entrada     = 0.0
+            continue
+
+        if not en_regimen:
+            continue
+
+        # Stop-loss
+        if posicion_actual != 0 and abs(z) > p.stop_z:
+            pnl = (spread.iloc[i] - precio_entrada) * posicion_actual * tam_entrada
+            trades.append({
+                "fecha_entrada": fecha_entrada,
+                "fecha_salida":  fecha,
+                "direccion":     "LONG" if posicion_actual == 1 else "SHORT",
+                "z_entrada":     float(zscore.loc[fecha_entrada]),
+                "z_salida":      float(z),
+                "pnl":           float(pnl),
+                "duracion_dias": (fecha - fecha_entrada).days,
+                "cierre_por":    "STOP",
+            })
+            retornos_diarios.iloc[i] -= coste_total * tam_entrada / p.capital
+            posicion_actual = 0
+            precio_entrada  = None
+            tam_entrada     = 0.0
+
+        # Cierre por reversión
+        elif posicion_actual == Señal.COMPRAR_SPREAD and z >= -p.salida_z:
+            pnl = (spread.iloc[i] - precio_entrada) * posicion_actual * tam_entrada
+            trades.append({
+                "fecha_entrada": fecha_entrada,
+                "fecha_salida":  fecha,
+                "direccion":     "LONG",
+                "z_entrada":     float(zscore.loc[fecha_entrada]),
+                "z_salida":      float(z),
+                "pnl":           float(pnl),
+                "duracion_dias": (fecha - fecha_entrada).days,
+                "cierre_por":    "REVERSION",
+            })
+            retornos_diarios.iloc[i] -= coste_total * tam_entrada / p.capital
+            posicion_actual = 0
+            precio_entrada  = None
+            tam_entrada     = 0.0
+
+        elif posicion_actual == Señal.VENDER_SPREAD and z <= p.salida_z:
+            pnl = (spread.iloc[i] - precio_entrada) * posicion_actual * tam_entrada
+            trades.append({
+                "fecha_entrada": fecha_entrada,
+                "fecha_salida":  fecha,
+                "direccion":     "SHORT",
+                "z_entrada":     float(zscore.loc[fecha_entrada]),
+                "z_salida":      float(z),
+                "pnl":           float(pnl),
+                "duracion_dias": (fecha - fecha_entrada).days,
+                "cierre_por":    "REVERSION",
+            })
+            retornos_diarios.iloc[i] -= coste_total * tam_entrada / p.capital
+            posicion_actual = 0
+            precio_entrada  = None
+            tam_entrada     = 0.0
+
+        # Apertura (sin posición y régimen activo)
+        elif posicion_actual == 0:
+            if z < -p.entrada_z:
+                posicion_actual = Señal.COMPRAR_SPREAD
+                precio_entrada  = spread.iloc[i]
+                fecha_entrada   = fecha
+                tam_entrada     = tam
+                retornos_diarios.iloc[i] -= coste_total * tam / p.capital
+            elif z > p.entrada_z:
+                posicion_actual = Señal.VENDER_SPREAD
+                precio_entrada  = spread.iloc[i]
+                fecha_entrada   = fecha
+                tam_entrada     = tam
+                retornos_diarios.iloc[i] -= coste_total * tam / p.capital
+
+    # Cerrar posición abierta al final del período
+    if posicion_actual != 0 and precio_entrada is not None:
+        pnl = (spread.iloc[-1] - precio_entrada) * posicion_actual * tam_entrada
+        trades.append({
+            "fecha_entrada": fecha_entrada,
+            "fecha_salida":  precios.index[-1],
+            "direccion":     "LONG" if posicion_actual == 1 else "SHORT",
+            "z_entrada":     float(zscore.loc[fecha_entrada]),
+            "z_salida":      float(zscore.iloc[-1]),
+            "pnl":           float(pnl),
+            "duracion_dias": (precios.index[-1] - fecha_entrada).days,
+            "cierre_por":    "FIN_PERIODO",
+        })
+
+    # ── 4. Estadísticas del régimen ───────────────────────────────────────────
+    regime_series = pd.Series(regime, index=precios.index, name="regimen_activo")
+    dias_activos  = int(regime.sum())
+
+    periodos: list[tuple] = []
+    en_periodo     = False
+    inicio_periodo = None
+    for i in range(n):
+        if regime[i] and not en_periodo:
+            en_periodo     = True
+            inicio_periodo = precios.index[i]
+        elif not regime[i] and en_periodo:
+            en_periodo = False
+            periodos.append((inicio_periodo, precios.index[i - 1]))
+    if en_periodo:
+        periodos.append((inicio_periodo, precios.index[-1]))
+
+    curva_capital = (1 + retornos_diarios).cumprod() * p.capital
+    df_trades     = pd.DataFrame(trades) if trades else pd.DataFrame()
+    pnl_series    = df_trades["pnl"] if not df_trades.empty else pd.Series(dtype=float)
+
+    # ── 5. Comparación con backtest naive ─────────────────────────────────────
+    res_naive  = MotorBacktest(precios, ticker1, ticker2, p).ejecutar()
+    m_naive    = res_naive["metricas"]
+    pnl_naive  = res_naive["trades"]["pnl"] if not res_naive["trades"].empty else pd.Series(dtype=float)
+
+    metricas = {
+        "par":                f"{ticker1}/{ticker2}",
+        "half_life":          round(hl, 1),
+        "window_usado":       window,
+        "capital_inicial":    p.capital,
+        "capital_final":      float(curva_capital.iloc[-1]),
+        "n_trades":           len(trades),
+        "dias_activos":       dias_activos,
+        "pct_tiempo_activo":  round(dias_activos / n * 100, 1),
+        "n_periodos":         len(periodos),
+        "sharpe":             round(sharpe_ratio(retornos_diarios), 3),
+        "sortino":            round(sortino_ratio(retornos_diarios), 3),
+        "cagr":               round(cagr(retornos_diarios) * 100, 2),
+        "mdd":                round(max_drawdown(retornos_diarios) * 100, 2),
+        "win_rate":           round(win_rate(pnl_series) * 100, 2) if len(pnl_series) > 0 else 0.0,
+        "profit_factor":      round(profit_factor(pnl_series), 3) if len(pnl_series) > 0 else 0.0,
+        # columnas naive para comparación
+        "n_trades_naive":     m_naive["n_trades"],
+        "win_rate_naive":     m_naive["win_rate"],
+        "profit_factor_naive": m_naive["profit_factor"],
+        "cagr_naive":         m_naive["cagr"],
+        "sharpe_naive":       m_naive["sharpe"],
+        "sortino_naive":      m_naive["sortino"],
+        "mdd_naive":          m_naive["mdd"],
+    }
+
+    if verbose:
+        _imprimir_reporte_paper(
+            metricas, periodos, df_trades,
+            str(precios.index[0])[:10],
+            str(precios.index[-1])[:10],
+        )
+
+    return {
+        "retornos":         retornos_diarios,
+        "curva_capital":    curva_capital,
+        "spread":           spread,
+        "zscore":           zscore,
+        "beta":             beta,
+        "trades":           df_trades,
+        "metricas":         metricas,
+        "regimen":          regime_series,
+        "periodos_activos": periodos,
     }
 
 

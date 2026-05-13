@@ -18,7 +18,8 @@
       "Bash(python -c \"import automatizacion, datos\")",
       "Bash(python -c ' *)",
       "Bash(.venv/bin/pip show *)",
-      "Bash(python -c \"import deteccion, automatizacion, main\")"
+      "Bash(python -c \"import deteccion, automatizacion, main\")",
+      "Bash(python -c \"import warnings; warnings.filterwarnings\\('ignore'\\); import main; print\\('main.py OK'\\)\")"
     ]
   }
 }

@@ -39,6 +39,7 @@ from deteccion import (
 )
 from backtesting import (
     backtest_completo,
+    paper_trading_historico,
     ParametrosBacktest,
     optimizar_parametros,
     walk_forward,
@@ -349,6 +350,71 @@ def modo_evaluar(args) -> None:
             print("  [WARN] evaluacion.py no disponible.")
 
 
+def modo_paper(args) -> None:
+    """
+    Paper trading histórico: opera solo durante períodos de cointegración confirmada.
+
+    Flujo:
+      1. Test EG rolling cada 5 barras — detecta cuándo el par está cointegrado
+      2. Solo activa el trading tras N tests consecutivos positivos (evita falsas alarmas)
+      3. Cierra la posición y pausa ante M tests consecutivos fallidos (ruptura)
+      4. Compara resultados con el backtest naive (sin filtro de régimen)
+    """
+    print("\n[MODO: PAPER TRADING]")
+
+    if args.par:
+        pares_lista = [{"ticker1": args.par[0], "ticker2": args.par[1]}]
+    elif getattr(args, "interactivo", True):
+        pares_lista = _seleccionar_de_csv(args.top_n)
+        if not pares_lista:
+            return
+    else:
+        try:
+            pares_lista = top_pares(n=args.top_n).to_dict("records")
+        except FileNotFoundError:
+            print("[!] Ejecuta primero --modo scan.")
+            return
+
+    tickers = list({t for p in pares_lista for t in (p["ticker1"], p["ticker2"])})
+    print(f"\n  Descargando datos diarios para {len(tickers)} tickers...")
+    precios = descargar_precios_alpaca(tickers)
+    precios = filtrar_datos(precios)
+
+    if precios.empty:
+        print("[!] Sin datos. Verifica las credenciales de Alpaca.")
+        return
+
+    for fila in pares_lista:
+        t1, t2 = fila["ticker1"], fila["ticker2"]
+        nombre = f"{t1}/{t2}"
+
+        if t1 not in precios.columns or t2 not in precios.columns:
+            print(f"  [WARN] {nombre}: datos insuficientes. Omitiendo.")
+            continue
+
+        print(f"\n{'─'*50}")
+        print(f"  {nombre}")
+        print(f"{'─'*50}")
+
+        rolling = estabilidad_rolling(precios[[t1, t2]], t1, t2)
+        _imprimir_madurez(diagnostico_madurez_cointegracion(rolling))
+
+        try:
+            resultado = paper_trading_historico(
+                precios[[t1, t2]], t1, t2, verbose=True
+            )
+        except ValueError as e:
+            print(f"  [WARN] {nombre}: {e}")
+            continue
+
+        if args.graficos:
+            try:
+                from evaluacion import generar_informe_completo
+                generar_informe_completo(resultado, nombre_par=f"{nombre}_paper")
+            except ImportError:
+                print("  [WARN] evaluacion.py no disponible.")
+
+
 def modo_full(args) -> None:
     """Pipeline completo no interactivo: scan → backtest top 5 pares."""
     print("\n[MODO: FULL PIPELINE]")
@@ -371,12 +437,13 @@ def main():
     )
     parser.add_argument(
         "--modo",
-        choices=["scan", "diario", "backtest", "evaluar", "full"],
+        choices=["scan", "diario", "backtest", "paper", "evaluar", "full"],
         default="diario",
         help=(
             "scan     : detectar pares cointegrados (datos horarios, 12 meses)\n"
             "diario   : verificar pares activos y generar señales del día\n"
             "backtest : backtesting out-of-sample de un par\n"
+            "paper    : paper trading histórico con detección dinámica de régimen\n"
             "evaluar  : gráficos de análisis para un par\n"
             "full     : scan + backtest de los mejores pares"
         ),
@@ -408,6 +475,7 @@ def main():
         "scan":     modo_scan,
         "diario":   modo_diario,
         "backtest": modo_backtest,
+        "paper":    modo_paper,
         "evaluar":  modo_evaluar,
         "full":     modo_full,
     }

@@ -37,7 +37,35 @@ from deteccion import (
 )
 from config import (
     MIN_OBS_HORARIO, UMBRAL_EG, VENTANA_COINT_ACTIVA, HORAS_DIA,
+    TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID,
 )
+
+
+def notificar_telegram(mensaje: str, html: bool = True) -> None:
+    """
+    Envía una notificación al chat de Telegram configurado en .env.
+    Usa HTTP directo (urllib) — no requiere python-telegram-bot.
+    No hace nada si el token o el chat_id no están configurados.
+    """
+    import urllib.request
+    import urllib.parse
+
+    if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
+        return
+
+    url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
+    # Dividir en trozos de ≤4000 chars para no superar el límite de Telegram
+    texto = mensaje
+    while texto:
+        trozo, texto = (texto[:4000], texto[4000:]) if len(texto) > 4000 else (texto, "")
+        datos: dict = {"chat_id": TELEGRAM_CHAT_ID, "text": trozo}
+        if html:
+            datos["parse_mode"] = "HTML"
+        try:
+            data = urllib.parse.urlencode(datos).encode()
+            urllib.request.urlopen(url, data, timeout=10)
+        except Exception as e:
+            print(f"[TELEGRAM] Error al enviar notificación: {e}")
 
 
 def _bpd(index: pd.DatetimeIndex) -> float:
@@ -272,7 +300,7 @@ def evaluar_par(
             "alerta":       coint_ok["alerta"],
         }
 
-    spread, beta, alpha = calcular_spread_kalman(df_close, t1, t2)
+    spread, beta = calcular_spread_kalman(df_close, t1, t2)
 
     min_obs    = max(30, int(MIN_OBS_HORARIO / HORAS_DIA * _bpd(df_close.index)))
     ventana_ou = min(min_obs, len(spread))
@@ -479,3 +507,49 @@ def imprimir_resumen_diario(df_señales: pd.DataFrame) -> None:
         for _, r in suspendidas.iterrows():
             print(f"    ⚠ {r['par']} — {r['alerta']}")
     print(f"{'='*60}\n")
+
+    # Notificación proactiva a Telegram si hay señales accionables
+    _push_resumen_telegram(df_señales, activas, cierres, suspendidas)
+
+
+def _push_resumen_telegram(
+    df_señales: pd.DataFrame,
+    activas: pd.DataFrame,
+    cierres: pd.DataFrame,
+    suspendidas: pd.DataFrame,
+) -> None:
+    """Construye y envía el resumen diario a Telegram si está configurado."""
+    if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
+        return
+    if activas.empty and cierres.empty and suspendidas.empty:
+        return
+
+    lineas = [
+        f"📈 <b>Reporte Diario — {datetime.today().strftime('%Y-%m-%d %H:%M')}</b>\n",
+        f"Evaluados: {len(df_señales)} | "
+        f"Entradas: {len(activas)} | "
+        f"Cierres: {len(cierres)} | "
+        f"Alertas: {len(suspendidas)}",
+    ]
+
+    if not activas.empty:
+        lineas.append("\n<b>🔔 Nuevas entradas:</b>")
+        for _, r in activas.iterrows():
+            icono = "▲" if r["señal"] == "LONG_SPREAD" else "▼"
+            madurez = r.get("madurez_estado", "")
+            lineas.append(
+                f"  {icono} <code>{r['par']}</code> | Z={r['z_score']:+.2f} | "
+                f"HL={r.get('half_life_bars', 0):.0f}b | {madurez}"
+            )
+
+    if not cierres.empty:
+        lineas.append("\n<b>✕ Cierres:</b>")
+        for _, r in cierres.iterrows():
+            lineas.append(f"  <code>{r['par']}</code> | Z={r['z_score']:+.2f}")
+
+    if not suspendidas.empty:
+        lineas.append("\n<b>⚠️ Alertas (cointegración rota):</b>")
+        for _, r in suspendidas.iterrows():
+            lineas.append(f"  <code>{r['par']}</code> — {r.get('alerta', '?')}")
+
+    notificar_telegram("\n".join(lineas), html=True)

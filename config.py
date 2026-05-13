@@ -6,6 +6,7 @@ Las API keys van en .env (nunca en este archivo).
 """
 
 import os
+from datetime import datetime
 try:
     from dotenv import load_dotenv
     load_dotenv()
@@ -30,7 +31,7 @@ MIN_VOLUMEN_DIARIO  = 500_000   # volumen medio diario mínimo para considerar u
 
 # ── Datos históricos ──────────────────────────────────────────────────────────
 INICIO_DEFAULT    = "2020-01-01"   # inicio del histórico Alpaca (out-of-sample)
-FIN_DEFAULT       = "2026-01-01"
+FIN_DEFAULT       = datetime.now().strftime("%Y-%m-%d")
 MIN_OBS           = 1260           # ~5 años de datos diarios mínimos por ticker
 
 # ── Calendario ────────────────────────────────────────────────────────────────
@@ -57,7 +58,7 @@ HL_MIN_DIAS       = 5              # half-life mínimo permitido (días)
 HL_MAX_DIAS       = 252            # half-life máximo permitido (días)
 
 # ── Señales de trading (spread.py) ───────────────────────────────────────────
-ENTRADA_Z         = 2.0            # umbral z-score para abrir posición
+ENTRADA_Z         = 1.5            # umbral z-score para abrir posición
 SALIDA_Z          = 0.5            # umbral z-score para cerrar posición
 STOP_Z            = 3.5            # stop-loss en z-score
 VENTANA_VOL       = 20             # ventana rolling para calcular volatilidad del spread
@@ -70,7 +71,7 @@ COMISION          = 0.001          # 0.10% por operación por pata
 USAR_LOG          = True           # usar log-precios para el spread
 
 # ── Grid search (backtesting.py) ─────────────────────────────────────────────
-GRID_ENTRADA_Z    = [1.5, 2.0, 2.5]
+GRID_ENTRADA_Z    = [1.0, 1.5, 2.0]
 GRID_SALIDA_Z     = [0.25, 0.5]
 GRID_WINDOW       = [None, 30, 60]  # None = ventana OU automática
 
