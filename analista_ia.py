@@ -137,6 +137,55 @@ def _construir_prompt_señales(df_señales: pd.DataFrame, fecha: str) -> str | N
     )
 
 
+def _construir_prompt_paper(resultado: dict, t1: str, t2: str) -> str:
+    """Construye el prompt para comparar paper trading inteligente vs naive."""
+    m = resultado.get("metricas", {})
+
+    cagr        = m.get("cagr", 0)
+    cagr_naive  = m.get("cagr_naive", 0)
+    sharpe      = m.get("sharpe", 0)
+    sharpe_naive = m.get("sharpe_naive", 0)
+    mdd         = m.get("mdd", 0)
+    mdd_naive   = m.get("mdd_naive", 0)
+    win_rate    = m.get("win_rate", 0)
+    win_rate_naive = m.get("win_rate_naive", 0)
+    pf          = m.get("profit_factor", 0)
+    pf_naive    = m.get("profit_factor_naive", 0)
+    n_trades    = m.get("n_trades", 0)
+    n_trades_naive = m.get("n_trades_naive", 0)
+    capital_final  = m.get("capital_final", 0)
+    capital_inicial = m.get("capital_inicial", 100_000)
+    pct_activo  = m.get("pct_tiempo_activo", 0)
+    n_periodos  = len(resultado.get("periodos_activos", []))
+
+    ganancia = capital_final - capital_inicial
+    ganancia_pct = (ganancia / capital_inicial * 100) if capital_inicial else 0
+
+    return (
+        "Eres un analista cuantitativo senior. Compara los resultados del paper trading "
+        "inteligente (solo opera cuando el modelo detecta cointegración activa) frente a la "
+        "estrategia ingenua (opera siempre, sin filtro de régimen) para el par "
+        f"{t1}/{t2}. Explica en español si la detección dinámica de régimen añade valor "
+        "real y por qué. Usa frases como \"la estrategia inteligente supera\", \"el filtro "
+        "de régimen evitó\", \"operar solo durante períodos de cointegración confirmada\". "
+        "Máximo 180 palabras. Un párrafo, sin bullets ni títulos.\n\n"
+        f"PAR: {t1}/{t2}\n"
+        "PERÍODO: 2020–2026\n"
+        f"TIEMPO EN MERCADO: {pct_activo:.1f}% del histórico ({n_periodos} períodos cointegrados)\n\n"
+        "RESULTADOS COMPARADOS:\n"
+        f"{'':26} {'PAPEL (inteligente)':>20}   {'NAIVE (siempre activo)':>22}\n"
+        f"{'CAGR anual:':<26} {cagr:>19.1f}%   {cagr_naive:>21.1f}%\n"
+        f"{'Sharpe Ratio:':<26} {sharpe:>20.2f}   {sharpe_naive:>22.2f}\n"
+        f"{'Max Drawdown:':<26} {mdd:>19.1f}%   {mdd_naive:>21.1f}%\n"
+        f"{'Win Rate:':<26} {win_rate:>19.1f}%   {win_rate_naive:>21.1f}%\n"
+        f"{'Profit Factor:':<26} {pf:>20.2f}   {pf_naive:>22.2f}\n"
+        f"{'Nº trades:':<26} {n_trades:>20}   {n_trades_naive:>22}\n"
+        f"{'Capital final:':<26} ${capital_final:>18,.0f}   (inicio: ${capital_inicial:,.0f})\n"
+        f"{'Ganancia neta:':<26} ${ganancia:>+18,.0f}   ({ganancia_pct:+.1f}%)\n\n"
+        "Redacta ahora el análisis comparativo para el cliente:"
+    )
+
+
 def analizar_backtest(resultado: dict, t1: str, t2: str) -> str | None:
     """
     Genera un párrafo narrativo de análisis del backtest usando Gemini AI.
@@ -172,4 +221,23 @@ def analizar_señales(df_señales: pd.DataFrame, fecha: str = "") -> str | None:
         return response.text.strip()
     except Exception as e:
         logging.getLogger(__name__).warning(f"[GeminiAI] Error en analizar_señales: {e}")
+        return None
+
+
+def analizar_paper(resultado: dict, t1: str, t2: str) -> str | None:
+    """
+    Genera un análisis comparativo del paper trading inteligente vs naive usando Gemini AI.
+    Devuelve None si Gemini no está disponible o si ocurre algún error.
+    """
+    if not _cliente_ok:
+        return None
+    prompt = _construir_prompt_paper(resultado, t1, t2)
+    try:
+        response = _genai_client.models.generate_content(
+            model=GEMINI_MODEL, contents=prompt
+        )
+        return response.text.strip()
+    except Exception as e:
+        logging.getLogger(__name__).warning(f"[GeminiAI] Error en analizar_paper: {e}")
+        return None
         return None

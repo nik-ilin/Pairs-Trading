@@ -32,7 +32,7 @@ from telegram.constants import ParseMode
 from telegram.ext import Application, CommandHandler, ContextTypes
 
 from config import TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID
-from analista_ia import analizar_backtest, analizar_señales
+from analista_ia import analizar_backtest, analizar_señales, analizar_paper
 
 logging.basicConfig(
     format="%(asctime)s — %(name)s — %(levelname)s — %(message)s",
@@ -505,6 +505,96 @@ async def cmd_evaluar(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         await msg.edit_text(f"❌ Error generando informe:\n`{e}`", parse_mode=ParseMode.MARKDOWN)
 
 
+# ── /paper ───────────────────────────────────────────────────────────────────
+
+async def cmd_paper(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not _autorizado(update):
+        return await _rechazar(update)
+
+    if not context.args or len(context.args) < 2:
+        await update.message.reply_text(
+            "Uso: `/paper TICKER1 TICKER2`\nEjemplo: `/paper KO PEP`",
+            parse_mode=ParseMode.MARKDOWN,
+        )
+        return
+
+    t1  = context.args[0].upper()
+    t2  = context.args[1].upper()
+    msg = await update.message.reply_text(
+        f"⏳ Paper trading `{t1}/{t2}` con detección de régimen...\n"
+        "_Esto puede tardar 2-3 minutos._",
+        parse_mode=ParseMode.MARKDOWN,
+    )
+
+    try:
+        from datos import descargar_precios_alpaca, filtrar_datos
+        from backtesting import paper_trading_historico
+
+        def _run():
+            precios = descargar_precios_alpaca([t1, t2])
+            precios = filtrar_datos(precios)
+            if precios.empty or t1 not in precios.columns or t2 not in precios.columns:
+                return None
+            return paper_trading_historico(precios[[t1, t2]], t1, t2, verbose=False)
+
+        resultado = await asyncio.to_thread(_run)
+
+        if resultado is None:
+            await msg.edit_text(
+                f"❌ Datos insuficientes para `{t1}/{t2}`.",
+                parse_mode=ParseMode.MARKDOWN,
+            )
+            return
+
+        m             = resultado.get("metricas", {})
+        n_periodos    = len(resultado.get("periodos_activos", []))
+        capital_final = m.get("capital_final", 0)
+        capital_ini   = m.get("capital_inicial", 100_000)
+        ganancia      = capital_final - capital_ini
+
+        texto = (
+            f"📊 *Paper Trading {t1}/{t2}*\n\n"
+            f"Períodos cointegrados: *{n_periodos}* | "
+            f"Tiempo activo: *{m.get('pct_tiempo_activo', 0):.1f}%*\n\n"
+            f"```\n"
+            f"{'Métrica':<22} {'Paper':>9} {'Naive':>9}\n"
+            f"{'─'*42}\n"
+            f"{'Trades':<22} {m.get('n_trades', 0):>9} {m.get('n_trades_naive', 0):>9}\n"
+            f"{'Win rate':<22} {m.get('win_rate', 0):>8.1f}% {m.get('win_rate_naive', 0):>8.1f}%\n"
+            f"{'Profit factor':<22} {m.get('profit_factor', 0):>9.3f} {m.get('profit_factor_naive', 0):>9.3f}\n"
+            f"{'CAGR':<22} {m.get('cagr', 0):>+8.2f}% {m.get('cagr_naive', 0):>+8.2f}%\n"
+            f"{'Sharpe':<22} {m.get('sharpe', 0):>9.3f} {m.get('sharpe_naive', 0):>9.3f}\n"
+            f"{'Max Drawdown':<22} {m.get('mdd', 0):>+8.2f}% {m.get('mdd_naive', 0):>+8.2f}%\n"
+            f"```\n\n"
+            f"Capital final: *${capital_final:,.0f}* "
+            f"(`{ganancia:+,.0f}` {ganancia / capital_ini * 100:+.1f}%)"
+        )
+        await msg.edit_text(texto, parse_mode=ParseMode.MARKDOWN)
+
+        # ── Análisis IA ──────────────────────────────────────────
+        try:
+            narrativa = await asyncio.to_thread(
+                analizar_paper, resultado, t1, t2
+            )
+            if narrativa:
+                fecha_str = datetime.today().strftime("%d/%m/%Y")
+                ia_msg = (
+                    "━━━━━━━━━━━━━━━━━━━━━━\n"
+                    "🤖 <b>Análisis del sistema</b>\n\n"
+                    f"{narrativa}\n\n"
+                    f"<i>Gemini 2.5 Flash · {fecha_str}</i>"
+                )
+                await update.message.reply_text(
+                    ia_msg, parse_mode=ParseMode.HTML
+                )
+        except Exception:
+            pass   # La narrativa IA es opcional — nunca bloquea
+
+    except Exception as e:
+        logger.exception("Error en cmd_paper")
+        await msg.edit_text(f"❌ Error en paper trading:\n`{e}`", parse_mode=ParseMode.MARKDOWN)
+
+
 # ── /scan ─────────────────────────────────────────────────────────────────────
 
 async def cmd_scan(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -563,6 +653,7 @@ async def _registrar_comandos(app: Application) -> None:
         BotCommand("estado",   "Posiciones abiertas actuales"),
         BotCommand("pares",    "Top N pares cointegrados [N]"),
         BotCommand("backtest", "Backtest de un par: T1 T2"),
+        BotCommand("paper",    "Paper trading con detección de régimen: T1 T2"),
         BotCommand("evaluar",  "Informe completo con gráficos: T1 T2"),
         BotCommand("scan",     "Scan completo S&P 500 (~20-35 min)"),
         BotCommand("ayuda",    "Lista de todos los comandos"),
@@ -591,6 +682,7 @@ def main() -> None:
     app.add_handler(CommandHandler("pares",               cmd_pares))
     app.add_handler(CommandHandler("diario",              cmd_diario))
     app.add_handler(CommandHandler("backtest",            cmd_backtest))
+    app.add_handler(CommandHandler("paper",               cmd_paper))
     app.add_handler(CommandHandler("evaluar",             cmd_evaluar))
     app.add_handler(CommandHandler("scan",                cmd_scan))
 

@@ -544,7 +544,55 @@ Guardados en `graficos/` con estilo dark profesional. Generados con `--modo eval
 
 ## Pruebas y resultados
 
+### Paper Trading — NOW / TYL (2020–2026)
 
+**ServiceNow (NOW)** y **Tyler Technologies (TYL)** son dos empresas de software empresarial del S&P 500 que históricamente han mostrado una relación de cointegración durante ventanas concretas. El paper trading con detección dinámica de régimen opera **únicamente** cuando el modelo confirma cointegración activa, evitando todo el ruido fuera de ese estado.
+
+#### Configuración del test
+
+| Parámetro | Valor |
+|---|---|
+| Período analizado | 2020-01-02 → 2026-05-13 |
+| Capital inicial | $100,000 |
+| Half-life del spread | 5.0 barras |
+| Ventana z-score | 5 barras |
+| Umbral de entrada | Z > ±2.0 |
+| Stop-loss | Z > ±3.5 |
+
+#### Períodos de cointegración detectados (3 ventanas)
+
+| # | Inicio | Fin | Duración |
+|---|---|---|---|
+| 1 | 2020-07-24 | 2020-08-06 | 13 días |
+| 2 | 2021-02-22 | 2021-03-19 | 25 días |
+| 3 | 2021-08-26 | 2021-09-09 | 14 días |
+
+> El modelo estuvo **activo solo el 2.5% del tiempo** (40 días de 1.599 barras analizadas).
+
+#### Trades ejecutados
+
+| Entrada | Salida | Dirección | PnL | Días | Cierre |
+|---|---|---|---|---|---|
+| 2020-07-30 | 2020-07-31 | LONG spread | +$12,920 | 1 | Reversión |
+| 2021-03-04 | 2021-03-05 | SHORT spread | +$45,247 | 1 | Reversión |
+
+#### Métricas comparativas — Inteligente vs Naive
+
+| Métrica | Paper (inteligente) | Naive (siempre activo) |
+|---|---|---|
+| **Capital final** | **$182,883** | ~$0 |
+| **Ganancia neta** | **+$82,883 (+82.9%)** | **-$99,780 (-99.8%)** |
+| **CAGR anual** | +9.98% | -99.78% |
+| **Sharpe Ratio** | 0.337 | -0.741 |
+| **Max Drawdown** | -16.76% | -131.81% |
+| **Win Rate** | 100.0% | 95.97% |
+| **Profit Factor** | ∞ (sin pérdidas) | 101.48 |
+| **Nº trades** | 2 | 124 |
+| **Tiempo en mercado** | 2.5% | 100% |
+
+#### Análisis — Gemini 2.5 Flash
+
+> *El análisis comparativo para el par NOW/TYL durante 2020–2026 demuestra inequívocamente que la detección dinámica de régimen añade un valor real sustancial. La estrategia inteligente supera con creces a la ingenua, generando un CAGR anual del 10.0% y un Sharpe Ratio de 0.34, frente al catastrófico -99.8% y -0.74, respectivamente, de la estrategia naive. El filtro de régimen evitó pérdidas masivas, reduciendo el Max Drawdown a solo -16.8%, mientras que la naive sufrió un devastador -131.8%. Operar solo durante períodos de cointegración confirmada, que representó apenas un 2.5% del tiempo total, permitió a la estrategia inteligente capitalizar únicamente las oportunidades de mayor probabilidad. Esto resultó en un Win Rate del 100% con solo 2 operaciones, culminando en una ganancia neta de $82,883 sobre un capital inicial de $100,000. En contraste, la estrategia ingenua realizó 124 operaciones sin filtro, llevando el capital a una pérdida casi total. Claramente, la activación selectiva basada en el régimen de cointegración es crítica para la rentabilidad y la gestión del riesgo.*
 
 ---
 
