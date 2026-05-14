@@ -7,17 +7,28 @@ Este proyecto presenta un modelo cuantitativo de trading automatizado  basado en
 ## Tabla de contenidos
 
 1. [Descripción](#descripción)
-2. [Alcance del proyecto](#alcance-del-proyecto)
-3. [Fundamentos matemáticos](#fundamentos-matemáticos)
-4. [Arquitectura](#arquitectura)
-5. [Instalación](#instalación)
-6. [Configuración](#configuración)
-7. [Uso — CLI](#uso--cli)
-8. [Bot de Telegram](#bot-de-telegram)
-9. [Sistema de fuentes de datos](#sistema-de-fuentes-de-datos)
-10. [Métricas de evaluación](#métricas-de-evaluación)
-11. [Gráficos generados](#gráficos-generados)
-12. [Objetivos SMART](#objetivos-smart)
+2. [Justificación](#justificación)
+3. [Alcance del proyecto](#alcance-del-proyecto)
+4. [Objetivos_SMART](#objetivos-smart)
+5. [Planificación_y_gestión](#Planificación_y_gestión)
+    * [5.1 Planificación](#planificación)
+    * [5.2 Gestión de Riesgos](#gestión-de-riesgos)
+    * [5.3 Calidad](#calidad)
+7. [Fases_del_proyecto](#fases_del_proyecto)
+8. [Fundamentos matemáticos](#fundamentos-matemáticos)
+9. [Arquitectura](#arquitectura)
+10. [Instalación](#instalación)
+11. [Configuración](#configuración)
+12. [Uso — CLI](#uso--cli)
+13. [Bot de Telegram](#bot-de-telegram)
+14. [Sistema de fuentes de datos](#sistema-de-fuentes-de-datos)
+15. [Métricas de evaluación](#métricas-de-evaluación)
+16. [Gráficos generados](#gráficos-generados)
+17. [Pruebas_y_resultados](#pruebas_y_resultados)
+18. [Conclusión](#conclusión)
+19. [Próximos_Pasos](#próximos_pasos)
+
+
 
 ---
 
@@ -33,15 +44,108 @@ El **arbitraje estadístico por pares** (pairs trading) explota la relación his
 
 ---
 
+## Justificación
+
+El presente trabajo nace de la necesidad de evitar que los métodos de inversión tradicionales se queden atrás frente a la volatilidad del mercado actual y la rápida evolución de la tecnología algorítmica. Se identifica una oportunidad clave para la mejora de procesos mediante la automatización, transformando el análisis de datos complejo en una herramienta de decisión objetiva que reduce el error humano y aumenta la eficiencia operativa. Al integrar modelos matemáticos de cointegración avanzados, el software no solo satisface una exigencia técnica de precisión, sino que asegura la competitividad y viabilidad económica del sistema en entornos financieros altamente dinámicos.
+
+---
+
 ## Alcance del proyecto
 
 El alcance de este proyecto abarca el diseño, desarrollo y validación de una arquitectura de software automatizada en Python enfocada en el Pairs Trading. La herramienta busca identificar oportunidades de inversión aprovechando la relación histórica y la convergencia temporal entre activos. De esta forma, se pretende demostrar, mediante simulaciones, la viabilidad de obtener un beneficio económico consistente a través de un modelo matemático replicable; un sistema diseñado para adaptarse a los diferentes ciclos del mercado a largo plazo y maximizar la rentabilidad manteniendo un estricto control del riesgo.
 
 ---
+## Objetivos SMART
+
+### Objetivo 1 — Detección de pares cointegrados ✓
+- **S**: Analizar de forma completa las 500 empresas del índice S&P 500 para encontrar parejas de acciones con una relación matemática sólida
+- **M**: Generar un listado de las mejores parejas encontradas, clasificadas por su fuerza estadística
+- **A**: Utilizar un proceso de filtrado en dos pasos para procesar miles de combinaciones en pocos minutos
+- **R**: Establecer la base del sistema de inversión actualizando los datos semanalmente
+- **T**: Basar el análisis en el comportamiento real del mercado de los últimos 12 meses (cointegración actual, no histórica)
+
+### Objetivo 2 — Backtesting riguroso ✓
+- **S**: Realizar pruebas históricas rigurosas para verificar cómo se habría comportado el sistema en el pasado
+- **M**: Confirmar que el sistema genera beneficios estables y que las rachas de pérdida nunca superan el 15% del capital
+- **A**: Aplicar modelos de simulación avanzados para asegurar que los resultados no son fruto del azar
+- **R**: Validar la viabilidad real del modelo antes de poner en riesgo capital real
+- **T**: Evaluar el rendimiento utilizando datos desde el año 2020 hasta la actualidad (datos nunca vistos en la detección)
+
+### Objetivo 3 — Automatización con fallback ✓
+- **S**: Crear un sistema que genere automáticamente señales de compra y venta cada día
+- **M**: Producir un informe diario con alertas claras y avisos sobre el nivel de riesgo en el mercado
+- **A**: Conectar el software a dos fuentes de datos distintas para que nunca deje de funcionar si una de ellas falla
+- **R**: Garantizar que el sistema funcione de forma autónoma cada día que la bolsa esté abierta
+- **T**: Señales disponibles cada día hábil en la apertura del mercado
+
+### Objetivo 4 — Control desde Telegram ✓
+- **S**: Integrar un bot de Telegram que permita supervisar y manejar todo el sistema desde el móvil
+- **M**: Disponer de comandos sencillos para recibir informes detallados y gráficos de rendimiento al instante
+- **A**: Vincular la herramienta de mensajería con el servidor central para una respuesta inmediata
+- **R**: Control total del sistema desde móvil sin acceso a terminal
+- **T**: Disponible 24/7 mientras el proceso Python esté en ejecución
+
+---
+
+## Planificación y gestión
+
+### 5.1 Planificación
+
+Fase 1: Investigación y Marco Teórico
+
+La fase inicial se centró en el estudio exhaustivo del estado del arte en finanzas cuantitativas. Se investigaron los principios del arbitraje estadístico, profundizando en conceptos de econometría como la estacionariedad de series temporales y los tests de cointegración (Engle-Granger y Johansen). Esta etapa fue fundamental para asentar las bases matemáticas necesarias antes de la escritura de cualquier línea de código.
+
+Fase 2: Diseño de la Arquitectura y Selección de Datos
+
+Una vez comprendida la teoría, se procedió a definir la estructura del algoritmo. En esta etapa se seleccionaron las fuentes de datos (universo S&P 500) y se fragmentó el sistema en módulos lógicos e independientes:
+
+  - Módulo de ingesta y limpieza de datos.
+
+  - Módulo de detección y filtrado de pares cointegrados.
+
+  - Módulo de modelado del spread y generación de señales.
+
+Fase 3: Desarrollo del Motor Algorítmico
+
+Esta fase comprendió la programación íntegra del sistema en Python. Se implementaron los componentes técnicos avanzados, como el Filtro de Kalman para el cálculo dinámico del ratio de cobertura y el proceso Ornstein-Uhlenbeck para medir la velocidad de reversión a la media. El resultado de esta fase fue un motor de trading funcional capaz de procesar miles de pares en tiempo real.
+
+Fase 4: Integración de Interfaz de Control (Bot de Telegram)
+
+Con el motor finalizado, se desarrolló una interfaz de gestión remota mediante un bot de Telegram. Esta fase se centró en la accesibilidad, permitiendo que el sistema fuera monitorizado y controlado desde cualquier dispositivo, enviando informes de rendimiento y gráficos de operaciones de forma automática.
+
+Fase 5: Validación y Pruebas Finales
+
+La fase de cierre se dedicó a un riguroso proceso de control de calidad. Se realizaron pruebas de backtesting con datos no vistos (Out-of-sample) y simulaciones de estrés (Monte Carlo) para asegurar la robustez del algoritmo ante diferentes escenarios de mercado. Asimismo, se verificó la estabilidad del sistema de fallback para garantizar la continuidad de los datos
+
+### 5.2 Gestión de Riesgos
+
+Ruptura de Cointegración (Cambio Estructural)
+-Descripción: Es la posibilidad de que la relación estadística entre dos activos se rompa de forma           permanente debido a factores externos (cambio de directiva, crisis sectorial o fusión de empresas). En      este escenario, el spread deja de volver a su media y comienza a divergir, lo que invalidaría la            estrategia.
+
+-Mitigación: El sistema incorpora un Stop-Loss dinámico basado en el Z-Score. Si la desviación supera un     límite crítico (por ejemplo, ±3.5 desviaciones estándar), el algoritmo asume que la "correa" se ha roto y   cierra la posición inmediatamente para proteger el capital. Además, se realiza una re-evaluación semanal    de la cointegración para descartar pares que pierdan su fuerza estadística.
+
+Disponibilidad de Datos y Fallo Tecnológico
+-Descripción: El algoritmo depende totalmente de la conexión con APIs externas (como Alpaca o yfinance) para obtener precios en tiempo real. Una caída del servidor, un error de red o una clave de API caducada podrían dejar al sistema "ciego" y sin capacidad de reaccionar ante cambios en el mercado.
+
+-Mitigación: Se ha implementado un sistema de redundancia o fallback automático. En caso de que la fuente de datos principal falle, el software cambia instantáneamente a una fuente secundaria sin interrumpir la ejecución. Asimismo, el Bot de Telegram actúa como monitor de seguridad, enviando una alerta inmediata al móvil del usuario si detecta cualquier error crítico en la descarga de datos o en la ejecución del código.
+
+
+### 5.3 Calidad
+
+- Robustez Estadística y Validación de Modelos
+Para asegurar que las oportunidades detectadas no son fruto de correlaciones espurias o del azar, el sistema exige un doble filtrado estadístico. La calidad se garantiza mediante la convergencia de los tests de Engle-Granger y Johansen, aceptando únicamente pares con un nivel de significancia estadística elevado ($p < 0.05$). Asimismo, el modelo se somete a una validación cruzada (In-sample y Out-of-sample), asegurando que la relación de cointegración identificada en el pasado se mantiene estable ante datos nuevos y no vistos por el algoritmo.
+
+- Gestión Dinámica del Riesgo y Neutralidad
+El sistema debe mantener un control estricto sobre la exposición al mercado para evitar episodios de inestabilidad financiera. Los estándares de calidad fijados para este proyecto incluyen:Neutralidad al mercado: El algoritmo debe mantener un "Beta" cercano a cero, garantizando que el beneficio dependa exclusivamente de la convergencia de los activos y no de la tendencia general de la bolsa.Límites de pérdida: Se establece un objetivo de Drawdown Máximo inferior al 15%.Ajuste por Volatilidad: El tamaño de las posiciones se recalcula dinámicamente según la volatilidad actual del spread, evitando una exposición excesiva en regímenes de mercado altamente inestables.
+
+- Integridad de Datos y Fiabilidad Operativa
+La calidad técnica del software se mide por su capacidad para operar de forma ininterrumpida y con datos veraces. Para ello, se han implementado procesos de validación de datos que eliminan errores de lectura o valores atípicos (outliers) que podrían sesgar el modelo. La arquitectura asegura la continuidad operativa mediante un sistema de redundancia de fuentes de datos (Alpaca/yfinance) y el uso de formatos de almacenamiento eficientes como Parquet, que garantizan la integridad de la información histórica y la rapidez en el procesamiento de señales diarias.
+
+---
 
 ## Fundamentos matemáticos
 
-### 1. Detección de cointegración
+### 1.  Detección de cointegración
 
 No todas las empresas del mismo sector sirven. Nuestro sistema escanea miles de combinaciones en el índice S&P 500 y las somete a exámenes estadísticos (Tests de Engle-Granger y Johansen). Esto nos filtra el "ruido" y nos deja solo con aquellas parejas que tienen una unión matemática real y demostrable (ordenándolas de mejor a peor).
 
@@ -434,32 +538,17 @@ Guardados en `graficos/` con estilo dark profesional. Generados con `--modo eval
 
 ---
 
-## Objetivos SMART
+## Pruebas y resultados
 
-### Objetivo 1 — Detección de pares cointegrados ✓
-- **S**: `deteccion.py` + `datos.py` — universo S&P 500 completo (~500 tickers, ~126.000 pares)
-- **M**: CSV con score Johansen, p-value EG y número de observaciones por par
-- **A**: Pipeline EG (pre-filtro ~0.001s/par) + Johansen (validador robusto)
-- **R**: Base de toda la estrategia; se actualiza semanalmente
-- **T**: Datos horarios de los últimos 12 meses (cointegración actual, no histórica)
 
-### Objetivo 2 — Backtesting riguroso ✓
-- **S**: `backtesting.py` — walk-forward, grid search IS/OOS 70/30, Monte Carlo, permutaciones
-- **M**: Sharpe > 1.0 y MDD < 15% con semáforos visuales en panel de métricas
-- **A**: Parámetros configurables: z-scores de entrada/salida, ventana OU, slippage, comisión
-- **R**: Valida la viabilidad antes de operar en vivo (split estricto IS/OOS)
-- **T**: Out-of-sample 2020–hoy (datos nunca vistos en la detección)
 
-### Objetivo 3 — Automatización con fallback ✓
-- **S**: `automatizacion.py` + `datos.py` — señales reproducibles con doble fuente de datos
-- **M**: Pipeline diario genera `señales_diarias.csv` con z-score, ADF, régimen de volatilidad y alertas de ruptura de cointegración
-- **A**: Alpaca primario + yfinance fallback automático ante cualquier error (credenciales, red, paquete)
-- **R**: Operación continua independiente de la disponibilidad de Alpaca
-- **T**: Señales disponibles cada día hábil en la apertura del mercado
+---
 
-### Objetivo 4 — Control desde Telegram ✓
-- **S**: `bot_telegram.py` — espejo completo del CLI accesible desde cualquier dispositivo
-- **M**: 9 comandos con respuesta en Markdown + envío automático de gráficos PNG
-- **A**: `python bot_telegram.py` + token de BotFather + chat_id personal en `.env`
-- **R**: Control total del sistema desde móvil sin acceso a terminal
-- **T**: Disponible 24/7 mientras el proceso Python esté en ejecución
+## Conclusiones
+
+
+---
+
+## Próximos Pasos
+
+
