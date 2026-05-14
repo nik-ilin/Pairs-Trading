@@ -56,37 +56,45 @@ El alcance de este proyecto abarca el diseño, desarrollo y validación de una a
 ---
 ## Objetivos SMART
 
-### Objetivo 1 — Detección de pares cointegrados 
+### Objetivo 1 — Detección de pares cointegrados
 
-- **S**: Analizar de forma completa las 500 empresas del índice S&P 500 para encontrar parejas de acciones con una relación matemática sólida
-- **M**: Generar un listado de las mejores parejas encontradas, clasificadas por su fuerza estadística
-- **A**: Utilizar un proceso de filtrado en dos pasos para procesar miles de combinaciones en pocos minutos
-- **R**: Establecer la base del sistema de inversión actualizando los datos semanalmente
-- **T**: Basar el análisis en el comportamiento real del mercado de los últimos 12 meses (cointegración actual, no histórica)
+| Criterio | Definición |
+|:---|:---|
+| **S** | Analizar de forma completa las 500 empresas del índice S&P 500 para encontrar parejas de acciones con una relación matemática sólida |
+| **M** | Generar un listado de las mejores parejas encontradas, clasificadas por su fuerza estadística |
+| **A** | Utilizar un proceso de filtrado en dos pasos para procesar miles de combinaciones en pocos minutos |
+| **R** | Establecer la base del sistema de inversión actualizando los datos semanalmente |
+| **T** | Basar el análisis en el comportamiento real del mercado de los últimos 12 meses (cointegración actual, no histórica) |
 
-### Objetivo 2 — Backtesting riguroso 
+### Objetivo 2 — Backtesting riguroso
 
-- **S**: Realizar pruebas históricas rigurosas para verificar cómo se habría comportado el sistema en el pasado
-- **M**: Confirmar que el sistema genera beneficios estables y que las rachas de pérdida nunca superan el 15% del capital
-- **A**: Aplicar modelos de simulación avanzados para asegurar que los resultados no son fruto del azar
-- **R**: Validar la viabilidad real del modelo antes de poner en riesgo capital real
-- **T**: Evaluar el rendimiento utilizando datos desde el año 2020 hasta la actualidad (datos nunca vistos en la detección)
+| Criterio | Definición |
+|:---|:---|
+| **S** | Realizar pruebas históricas rigurosas para verificar cómo se habría comportado el sistema en el pasado |
+| **M** | Confirmar que el sistema genera beneficios estables y que las rachas de pérdida nunca superan el 15% del capital |
+| **A** | Aplicar modelos de simulación avanzados para asegurar que los resultados no son fruto del azar |
+| **R** | Validar la viabilidad real del modelo antes de poner en riesgo capital real |
+| **T** | Evaluar el rendimiento utilizando datos desde el año 2020 hasta la actualidad (datos nunca vistos en la detección) |
 
-### Objetivo 3 — Automatización con fallback 
+### Objetivo 3 — Automatización con fallback
 
-- **S**: Crear un sistema que genere automáticamente señales de compra y venta cada día
-- **M**: Producir un informe diario con alertas claras y avisos sobre el nivel de riesgo en el mercado
-- **A**: Conectar el software a dos fuentes de datos distintas para que nunca deje de funcionar si una de ellas falla
-- **R**: Garantizar que el sistema funcione de forma autónoma cada día que la bolsa esté abierta
-- **T**: Señales disponibles cada día hábil en la apertura del mercado
+| Criterio | Definición |
+|:---|:---|
+| **S** | Crear un sistema que genere automáticamente señales de compra y venta cada día |
+| **M** | Producir un informe diario con alertas claras y avisos sobre el nivel de riesgo en el mercado |
+| **A** | Conectar el software a dos fuentes de datos distintas para que nunca deje de funcionar si una de ellas falla |
+| **R** | Garantizar que el sistema funcione de forma autónoma cada día que la bolsa esté abierta |
+| **T** | Señales disponibles cada día hábil en la apertura del mercado |
 
-### Objetivo 4 — Control desde Telegram 
+### Objetivo 4 — Control desde Telegram
 
-- **S**: Integrar un bot de Telegram que permita supervisar y manejar todo el sistema desde el móvil
-- **M**: Disponer de comandos sencillos para recibir informes detallados y gráficos de rendimiento al instante
-- **A**: Vincular la herramienta de mensajería con el servidor central para una respuesta inmediata
-- **R**: Control total del sistema desde móvil sin acceso a terminal
-- **T**: Disponible 24/7 mientras el proceso Python esté en ejecución
+| Criterio | Definición |
+|:---|:---|
+| **S** | Integrar un bot de Telegram que permita supervisar y manejar todo el sistema desde el móvil |
+| **M** | Disponer de comandos sencillos para recibir informes detallados y gráficos de rendimiento al instante |
+| **A** | Vincular la herramienta de mensajería con el servidor central para una respuesta inmediata |
+| **R** | Control total del sistema desde móvil sin acceso a terminal |
+| **T** | Disponible 24/7 mientras el proceso Python esté en ejecución |
 
 ---
 
