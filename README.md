@@ -9,12 +9,12 @@ Este proyecto presenta un modelo cuantitativo de trading automatizado  basado en
 1. [Descripción](#descripción)
 2. [Justificación](#justificación)
 3. [Alcance del proyecto](#alcance-del-proyecto)
-4. [Objetivos_SMART](#objetivos-smart)
-5. [Planificación_y_gestión](#Planificación_y_gestión)
+4. [Objetivos SMART](#objetivos-smart)
+5. [Planificación y gestión](#Planificación-y-gestión)
     * [5.1 Planificación](#planificación)
     * [5.2 Gestión de Riesgos](#gestión-de-riesgos)
     * [5.3 Calidad](#calidad)
-7. [Fases_del_proyecto](#fases_del_proyecto)
+7. [Fases del proyecto](#fases-del-proyecto)
 8. [Fundamentos matemáticos](#fundamentos-matemáticos)
 9. [Arquitectura](#arquitectura)
 10. [Instalación](#instalación)
@@ -24,9 +24,9 @@ Este proyecto presenta un modelo cuantitativo de trading automatizado  basado en
 14. [Sistema de fuentes de datos](#sistema-de-fuentes-de-datos)
 15. [Métricas de evaluación](#métricas-de-evaluación)
 16. [Gráficos generados](#gráficos-generados)
-17. [Pruebas_y_resultados](#pruebas_y_resultados)
+17. [Pruebas y resultados](#pruebas-y-resultados)
 18. [Conclusión](#conclusión)
-19. [Próximos_Pasos](#próximos_pasos)
+19. [Próximos Pasos](#próximos-pasos)
 
 
 
@@ -145,6 +145,15 @@ El sistema debe mantener un control estricto sobre la exposición al mercado par
 **Integridad de Datos y Fiabilidad Operativa**
 
 La calidad técnica del software se mide por su capacidad para operar de forma ininterrumpida y con datos veraces. Para ello, se han implementado procesos de validación de datos que eliminan errores de lectura o valores atípicos (outliers) que podrían sesgar el modelo. La arquitectura asegura la continuidad operativa mediante un sistema de redundancia de fuentes de datos (Alpaca/yfinance) y el uso de formatos de almacenamiento eficientes como Parquet, que garantizan la integridad de la información histórica y la rapidez en el procesamiento de señales diarias.
+
+---
+
+## Fases del proyecto
+
+
+
+
+
 
 ---
 
