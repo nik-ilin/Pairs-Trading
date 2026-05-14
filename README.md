@@ -14,19 +14,18 @@ Este proyecto presenta un modelo cuantitativo de trading automatizado  basado en
     * [5.1 Planificación](#planificación)
     * [5.2 Gestión de Riesgos](#gestión-de-riesgos)
     * [5.3 Calidad](#calidad)
-7. [Fases del proyecto](#fases-del-proyecto)
-8. [Fundamentos matemáticos](#fundamentos-matemáticos)
-9. [Arquitectura](#arquitectura)
-10. [Instalación](#instalación)
-11. [Configuración](#configuración)
-12. [Uso — CLI](#uso--cli)
-13. [Bot de Telegram](#bot-de-telegram)
-14. [Sistema de fuentes de datos](#sistema-de-fuentes-de-datos)
-15. [Métricas de evaluación](#métricas-de-evaluación)
-16. [Gráficos generados](#gráficos-generados)
-17. [Pruebas y resultados](#pruebas-y-resultados)
-18. [Conclusión](#conclusión)
-19. [Próximos Pasos](#próximos-pasos)
+6. [Fundamentos matemáticos](#fundamentos-matemáticos)
+7. [Arquitectura](#arquitectura)
+8. [Instalación](#instalación)
+9. [Configuración](#configuración)
+10. [Uso — CLI](#uso--cli)
+11. [Bot de Telegram](#bot-de-telegram)
+12. [Sistema de fuentes de datos](#sistema-de-fuentes-de-datos)
+13. [Métricas de evaluación](#métricas-de-evaluación)
+14. [Gráficos generados](#gráficos-generados)
+15. [Pruebas y resultados](#pruebas-y-resultados)
+16. [Conclusión](#conclusión)
+17. [Próximos Pasos](#próximos-pasos)
 
 
 
@@ -145,15 +144,6 @@ El sistema debe mantener un control estricto sobre la exposición al mercado par
 **Integridad de Datos y Fiabilidad Operativa**
 
 La calidad técnica del software se mide por su capacidad para operar de forma ininterrumpida y con datos veraces. Para ello, se han implementado procesos de validación de datos que eliminan errores de lectura o valores atípicos (outliers) que podrían sesgar el modelo. La arquitectura asegura la continuidad operativa mediante un sistema de redundancia de fuentes de datos (Alpaca/yfinance) y el uso de formatos de almacenamiento eficientes como Parquet, que garantizan la integridad de la información histórica y la rapidez en el procesamiento de señales diarias.
-
----
-
-## Fases del proyecto
-
-
-
-
-
 
 ---
 
