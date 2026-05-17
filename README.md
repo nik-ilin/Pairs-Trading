@@ -400,7 +400,7 @@ Genera todos los gráficos en `graficos/` y muestra métricas completas.
 
 ## Bot de Telegram
 
-El bot de Telegram espeja completamente el CLI: cada modo del sistema tiene su comando equivalente, con salida formateada en Markdown y envío automático de gráficos PNG.
+El bot de Telegram (`bot_telegram.py`) espeja **completamente** el CLI: cada modo del sistema tiene su comando equivalente, con salida formateada en Markdown, análisis automático con Gemini y envío de gráficos PNG directamente al chat.
 
 ### Paso 1 — Crear el bot con BotFather
 
@@ -452,40 +452,99 @@ kill $(pgrep -f bot_telegram.py)
 
 | Comando | Equivalente CLI | Descripción |
 |---|---|---|
-| `/start` | — | Bienvenida y menú de ayuda |
-| `/ayuda` | — | Lista de comandos |
+| `/start` | — | Bienvenida y menú de ayuda completo |
+| `/ayuda` | — | Lista de todos los comandos |
+| `/scan` | `--modo scan` | Scan S&P 500 + filtro SMART automático (~30-45 min) |
+| `/full [N]` | `--modo full` | Pipeline completo: scan → filtro SMART → backtest optimizado top N pares |
 | `/diario [N]` | `--modo diario --top-n N` | Pipeline diario para top N pares (default 20) |
+| `/senal T1 T2` | — | Señal detallada: Z-score, beta Kalman, half-life OU, ADF, EG, madurez |
 | `/senales` | — | Señales del último `/diario` guardadas en CSV |
-| `/estado` | — | Posiciones abiertas con dirección, fecha y z-score de entrada |
-| `/pares [N]` | — | Top N pares del CSV ordenados por score (default 10) |
-| `/backtest T1 T2` | `--modo backtest --par T1 T2` | Backtest 2020–hoy con todas las métricas |
+| `/backtest T1 T2 [opt] [wf]` | `--modo backtest --par T1 T2 [--optimizar] [--walk-forward]` | Backtest 2020–hoy; `opt` activa grid search, `wf` activa walk-forward |
+| `/paper T1 T2` | `--modo paper --par T1 T2` | Paper trading histórico con detección dinámica de régimen |
 | `/evaluar T1 T2` | `--modo evaluar --par T1 T2` | Backtest + genera y envía todos los gráficos PNG |
-| `/scan` | `--modo scan` | Scan completo S&P 500 en background (~20-35 min) |
+| `/pares [N]` | — | Top N pares del CSV con Score, Sharpe y MDD (default 10) |
+| `/estado` | — | Posiciones abiertas con dirección, fecha y z-score de entrada |
+
+### Diferencias respecto al CLI
+
+| Comportamiento CLI | Comportamiento Bot |
+|---|---|
+| `/scan` ofrece menú interactivo para elegir qué pares guardar | `/scan` guarda automáticamente todos los pares que pasan el filtro SMART |
+| `--modo full` no interactivo, top 5 fijo | `/full [N]` acepta N como argumento (default 5, máximo 10) |
+| `--graficos` es un flag opcional del backtest | `/evaluar` siempre genera y envía los gráficos |
+| `--optimizar` y `--walk-forward` son flags separados | `/backtest T1 T2 opt wf` combina ambos en un solo comando |
 
 ### Ejemplos de uso
 
 ```
-/diario 50           → Señales para los 50 mejores pares
-/pares 20            → Top 20 pares del CSV
-/backtest KO PEP     → Backtest Coca-Cola vs PepsiCo
-/evaluar AAPL MSFT   → Informe completo + gráficos enviados por Telegram
-/estado              → Posiciones abiertas actuales
-/scan                → Iniciar scan completo (avisa cuando termina)
+/scan                    → Scan completo + filtro SMART (avisa al terminar)
+/full 3                  → Pipeline completo top 3 pares
+/diario 50               → Señales para los 50 mejores pares
+/senal KO PEP            → Señal detallada de Coca-Cola vs PepsiCo
+/backtest KO PEP         → Backtest con parámetros por defecto
+/backtest KO PEP opt     → Backtest con optimización de parámetros
+/backtest KO PEP opt wf  → Backtest con optimización + walk-forward
+/paper KO PEP            → Paper trading con detección de régimen
+/evaluar AAPL MSFT       → Informe completo + gráficos por Telegram
+/pares 20                → Top 20 pares del CSV
+/senales                 → Última ejecución del pipeline guardada
+/estado                  → Posiciones abiertas actuales
+```
+
+### Ejemplo de respuesta — `/scan`
+
+```
+✅ Scan completado — 2026-05-17 10:12
+
+🔍 Cointegrados (EG+Johansen): 47
+✅ Pasan filtro SMART: 12 de 47
+
+Top 5 pares (filtro SMART):
+Par            Score  Sharpe   MDD%
+──────────────────────────────────
+UNH/WST        2.378  +1.84    8.3%
+CI/EW          2.191  +1.61   11.7%
+UNH/VRTX       2.342  +1.43   13.2%
+AMGN/CAH       1.713  +1.21   14.8%
+CRL/CI         1.888  +1.10   14.1%
+
+12 pares guardados en CSV (filtro SMART).
+Usa /pares 20 para ver más o /diario para señales.
 ```
 
 ### Ejemplo de respuesta — `/diario 50`
 
 ```
-✅ Pipeline diario — 2026-04-30 09:35
+✅ Pipeline diario — 2026-05-17 09:35
 
 📊 Evaluados: 50 | ▲▼ Entradas: 2 | ✕ Cierres: 1 | — Hold: 47 | ⚠ Susp: 0
 
 🔔 Señales de entrada:
-▲ `NRG/DIS`  Z=+2.14 β=0.923 HL=89b Vol=NORMAL
-▼ `MSCI/NRG` Z=-2.31 β=1.102 HL=64b Vol=BAJA
+▲ `UNH/WST`  Z=+2.14 β=0.923 HL=89b Vol=NORMAL
+▼ `CI/EW`    Z=-2.31 β=1.102 HL=64b Vol=BAJA
 
 ✕ Cierres recomendados:
-✕ `COF/TPL` Z=+0.43
+✕ `AMGN/CAH` Z=+0.43
+```
+
+### Ejemplo de respuesta — `/senal KO PEP`
+
+```
+📊 KO/PEP — Señal detallada
+
+Señal:       — HOLD
+Z-score:     -0.3821
+Beta Kalman: 0.8734
+Half-life:   42.0 barras
+Ventana z:   42 barras
+Vol régimen: NORMAL
+ADF p-val:   0.0231 (✓ estacionario)
+EG p-val:    0.0187 (✓ cointegrado)
+
+Precios: KO $63.41 | PEP $148.22
+
+Cointegración: ◉ CONSOLIDADA →
+Cointegración estable durante todo el período analizado
 ```
 
 ---
