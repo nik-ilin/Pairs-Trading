@@ -22,7 +22,7 @@ import numpy as np
 import pandas as pd
 from statsmodels.tsa.stattools import adfuller, coint
 
-from datos import descargar_ohlcv_horario, obtener_sp500
+from datos import descargar_ohlcv_horario, obtener_sp500, descargar_precios_alpaca, filtrar_datos
 from spread import (
     calcular_spread_kalman,
     calcular_zscore,
@@ -38,6 +38,7 @@ from deteccion import (
 from config import (
     MIN_OBS_HORARIO, UMBRAL_EG, VENTANA_COINT_ACTIVA, HORAS_DIA,
     TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID,
+    OBJETIVO_SHARPE, OBJETIVO_MDD,
 )
 from analista_ia import analizar_señales
 
@@ -155,6 +156,98 @@ def ejecutar_scan_semanal(
         guardar_pares(pares)
 
     return pares
+
+
+# ── Segundo filtro: objetivos SMART via backtest rápido ───────────────────────
+
+def filtrar_por_backtest_smart(
+    pares_df: pd.DataFrame,
+    precios_diarios: pd.DataFrame | None = None,
+    obj_sharpe: float | None = None,
+    obj_mdd_pct: float | None = None,
+    verbose: bool = True,
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """
+    Segundo filtro sobre los pares cointegrados: backtest rápido con datos diarios.
+
+    Para cada par corre MotorBacktest con parámetros por defecto y descarta los que
+    no alcanzan los objetivos SMART definidos en config.py:
+      · Sharpe ≥ OBJETIVO_SHARPE  (default 1.0)
+      · MDD    ≤ abs(OBJETIVO_MDD)*100  (default 15 %)
+
+    Si precios_diarios es None los descarga automáticamente de Alpaca.
+
+    Returns:
+        (pares_que_pasan_df, todos_con_métricas_df)
+        Ambos DataFrames incluyen las columnas originales más: sharpe, sortino,
+        mdd, cagr, n_trades, win_rate, profit_factor.
+    """
+    from backtesting import MotorBacktest, ParametrosBacktest
+
+    min_sharpe = obj_sharpe   if obj_sharpe   is not None else OBJETIVO_SHARPE
+    max_mdd    = obj_mdd_pct  if obj_mdd_pct  is not None else abs(OBJETIVO_MDD) * 100
+
+    if precios_diarios is None or precios_diarios.empty:
+        tickers = list(set(pares_df["ticker1"].tolist() + pares_df["ticker2"].tolist()))
+        if verbose:
+            print(f"  Descargando datos diarios para {len(tickers)} tickers...")
+        precios_diarios = filtrar_datos(descargar_precios_alpaca(tickers))
+
+    if verbose:
+        print(f"\n[FILTRO SMART] Backtest rápido sobre {len(pares_df)} pares "
+              f"(Sharpe ≥ {min_sharpe:.1f}, MDD ≤ {max_mdd:.0f}%)...")
+
+    resultados = []
+    for _, row in pares_df.iterrows():
+        t1, t2 = row["ticker1"], row["ticker2"]
+        nombre = f"{t1}/{t2}"
+
+        if t1 not in precios_diarios.columns or t2 not in precios_diarios.columns:
+            if verbose:
+                print(f"  [SKIP] {nombre}: sin datos diarios")
+            continue
+
+        try:
+            motor = MotorBacktest(
+                precios_diarios[[t1, t2]], t1, t2, ParametrosBacktest()
+            )
+            res  = motor.ejecutar()
+            m    = res["metricas"]
+            pasa = m["sharpe"] >= min_sharpe and m["mdd"] <= max_mdd
+
+            resultados.append({
+                **row.to_dict(),
+                "sharpe":        m["sharpe"],
+                "sortino":       m["sortino"],
+                "mdd":           m["mdd"],
+                "cagr":          m["cagr"],
+                "n_trades":      m["n_trades"],
+                "win_rate":      m["win_rate"],
+                "profit_factor": m["profit_factor"],
+                "pasa_smart":    pasa,
+            })
+
+            if verbose:
+                marca = "✓" if pasa else "✗"
+                tag   = "PASA   " if pasa else "NO PASA"
+                print(f"  {marca} {tag} | {nombre:<14} | "
+                      f"Sharpe={m['sharpe']:+.2f} | MDD={m['mdd']:.1f}% | "
+                      f"CAGR={m['cagr']:.1f}%")
+
+        except Exception as e:
+            if verbose:
+                print(f"  [ERR] {nombre}: {e}")
+
+    if not resultados:
+        return pd.DataFrame(), pd.DataFrame()
+
+    todos_df   = pd.DataFrame(resultados)
+    pasaron_df = (
+        todos_df[todos_df["pasa_smart"]]
+        .drop(columns=["pasa_smart"])
+        .reset_index(drop=True)
+    )
+    return pasaron_df, todos_df
 
 
 # ── Tests estadísticos en tiempo real ────────────────────────────────────────

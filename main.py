@@ -49,6 +49,7 @@ from automatizacion import (
     ejecutar_scan_semanal,
     actualizar_estado,
     imprimir_resumen_diario,
+    filtrar_por_backtest_smart,
 )
 from metricas import reporte_completo
 
@@ -100,6 +101,70 @@ def _seleccionar_pares_interactivo(pares_df: pd.DataFrame) -> pd.DataFrame:
             else:
                 indices.add(int(parte) - 1)
         validos = [i for i in sorted(indices) if 0 <= i < len(pares_df)]
+        resultado = pares_df.iloc[validos].reset_index(drop=True)
+        print(f"  [OK] {len(resultado)} pares seleccionados.")
+        return resultado
+    except (ValueError, IndexError):
+        print("  [WARN] Selección inválida. Guardando todos.")
+        return pares_df
+
+
+def _seleccionar_pares_smart(pares_df: pd.DataFrame, n_evaluados: int) -> pd.DataFrame:
+    """
+    Muestra los pares que superaron el filtro SMART y permite elegir cuáles guardar.
+    Columns esperadas: ticker1, ticker2, score, sharpe, mdd, cagr, n_trades, win_rate.
+    """
+    from config import OBJETIVO_SHARPE, OBJETIVO_MDD
+
+    if pares_df.empty:
+        return pares_df
+
+    pares_df = pares_df.reset_index(drop=True)
+
+    print(f"\n{'='*86}")
+    print(f"  PARES QUE PASAN EL FILTRO SMART: {len(pares_df)} de {n_evaluados}")
+    print(f"  Criterios: Sharpe ≥ {OBJETIVO_SHARPE:.1f}  |  MDD ≤ {abs(OBJETIVO_MDD)*100:.0f}%")
+    print(f"{'='*86}")
+    print(f"  {'#':>4}  {'Par':<14}  {'Score':>7}  {'Sharpe':>7}  {'MDD%':>6}  "
+          f"{'CAGR%':>6}  {'Trades':>7}  {'WinRate':>8}")
+    print(f"  {'─'*4}  {'─'*14}  {'─'*7}  {'─'*7}  {'─'*6}  "
+          f"{'─'*6}  {'─'*7}  {'─'*8}")
+
+    for i, row in pares_df.iterrows():
+        par = f"{row['ticker1']}/{row['ticker2']}"
+        print(
+            f"  {i+1:>4}  {par:<14}  {row.get('score', 0):>7.4f}  "
+            f"{row.get('sharpe', 0):>+7.2f}  {row.get('mdd', 0):>6.1f}  "
+            f"{row.get('cagr', 0):>6.1f}  {row.get('n_trades', 0):>7}  "
+            f"{row.get('win_rate', 0):>7.1f}%"
+        )
+
+    print()
+    print("  Score  = fuerza de cointegración Johansen (mayor = mejor)")
+    print("  Sharpe = ratio de Sharpe del backtest (objetivo: ≥ 1.0)")
+    print("  MDD%   = máximo drawdown del backtest  (objetivo: ≤ 15%)")
+    print()
+    print("  ¿Qué pares deseas guardar?")
+    print("    Números por coma  ->  ej: 1,3,5")
+    print("    Rango con guion   ->  ej: 1-5")
+    print("    ENTER             ->  guardar todos")
+    print()
+
+    entrada = input("  Tu selección: ").strip()
+    if not entrada:
+        print(f"  [OK] Guardando todos los {len(pares_df)} pares que pasan el filtro SMART.")
+        return pares_df
+
+    indices: set[int] = set()
+    try:
+        for parte in entrada.split(","):
+            parte = parte.strip()
+            if "-" in parte:
+                a, b = parte.split("-", 1)
+                indices.update(range(int(a) - 1, int(b)))
+            else:
+                indices.add(int(parte) - 1)
+        validos   = [i for i in sorted(indices) if 0 <= i < len(pares_df)]
         resultado = pares_df.iloc[validos].reset_index(drop=True)
         print(f"  [OK] {len(resultado)} pares seleccionados.")
         return resultado
@@ -192,6 +257,8 @@ def modo_scan(args) -> None:
     """
     Scan semanal: descarga datos horarios y busca pares cointegrados ahora.
     Siempre fuerza un scan nuevo independientemente de la antigüedad del CSV.
+    Aplica un segundo filtro SMART (Sharpe ≥ 1.0, MDD ≤ 15%) mediante backtest
+    rápido sobre datos diarios antes de ofrecer la lista al usuario.
     """
     print("\n[MODO: SCAN]")
 
@@ -206,6 +273,42 @@ def modo_scan(args) -> None:
         print("[!] No se encontraron pares cointegrados.")
         return
 
+    # Segundo filtro: objetivos SMART mediante backtest rápido con datos diarios
+    tickers_bt = list(set(pares["ticker1"].tolist() + pares["ticker2"].tolist()))
+    print(f"\n  Descargando datos diarios para filtro SMART ({len(tickers_bt)} tickers)...")
+    precios_diarios = filtrar_datos(descargar_precios_alpaca(tickers_bt))
+
+    if not precios_diarios.empty:
+        pares_smart, todos = filtrar_por_backtest_smart(
+            pares, precios_diarios, verbose=True
+        )
+        n_pasan = len(pares_smart)
+        n_total = len(todos)
+
+        print(f"\n  Resultado filtro SMART: {n_pasan}/{n_total} pares superan los objetivos.")
+
+        if not pares_smart.empty:
+            if getattr(args, "interactivo", True):
+                pares = _seleccionar_pares_smart(pares_smart, n_total)
+            else:
+                pares = pares_smart
+            guardar_pares(pares)
+            return
+
+        # Ninguno pasó el filtro SMART
+        print("\n  [!] Ningún par superó el filtro SMART (Sharpe ≥ 1.0 y MDD ≤ 15%).")
+        if getattr(args, "interactivo", True):
+            print("  ¿Guardar igualmente los pares cointegrados sin filtro SMART? [s/N]: ", end="")
+            resp = input().strip().lower()
+            if resp in ("s", "si", "sí", "y", "yes"):
+                pares = _seleccionar_pares_interactivo(pares)
+                guardar_pares(pares)
+            else:
+                print("  [OK] No se guardó ningún par.")
+        return
+
+    # Sin datos diarios: saltar filtro SMART y ofrecer lista original
+    print("\n  [WARN] Sin datos diarios disponibles — filtro SMART omitido.")
     if getattr(args, "interactivo", True):
         pares = _seleccionar_pares_interactivo(pares)
         guardar_pares(pares)
