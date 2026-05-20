@@ -10,22 +10,21 @@ Este proyecto presenta un modelo cuantitativo de trading automatizado  basado en
 2. [Justificación](#justificación)
 3. [Alcance del proyecto](#alcance-del-proyecto)
 4. [Objetivos SMART](#objetivos-smart)
-5. [Planificación y gestión](#Planificación-y-gestión)
-    * [5.1 Planificación](#planificación)
-    * [5.2 Gestión de Riesgos](#gestión-de-riesgos)
-    * [5.3 Calidad](#calidad)
-6. [Fundamentos matemáticos](#fundamentos-matemáticos)
-7. [Arquitectura](#arquitectura)
-8. [Instalación](#instalación)
-9. [Configuración](#configuración)
-10. [Uso — CLI](#uso--cli)
-11. [Bot de Telegram](#bot-de-telegram)
-12. [Sistema de fuentes de datos](#sistema-de-fuentes-de-datos)
-13. [Métricas de evaluación](#métricas-de-evaluación)
-14. [Gráficos generados](#gráficos-generados)
-15. [Pruebas y resultados](#pruebas-y-resultados)
-16. [Conclusión](#conclusión)
-17. [Próximos Pasos](#próximos-pasos)
+5. [Planificación](#planificación)
+6. [Gestión de Riesgos](#gestión-de-riesgos)
+7. [Calidad](#calidad)
+8. [Fundamentos matemáticos](#fundamentos-matemáticos)
+9. [Arquitectura](#arquitectura)
+10. [Instalación](#instalación)
+11. [Configuración](#configuración)
+12. [Uso — CLI](#uso--cli)
+13. [Bot de Telegram](#bot-de-telegram)
+14. [Sistema de fuentes de datos](#sistema-de-fuentes-de-datos)
+15. [Métricas de evaluación](#métricas-de-evaluación)
+16. [Gráficos generados](#gráficos-generados)
+17. [Pruebas y resultados](#pruebas-y-resultados)
+18. [Conclusión](#conclusión)
+19. [Próximos Pasos](#próximos-pasos)
 
 
 
@@ -98,9 +97,7 @@ El alcance de este proyecto abarca el diseño, desarrollo y validación de una a
 
 ---
 
-## Planificación y gestión
-
-### 5.1 Planificación
+## Planificación
 
 **Fase 1: Investigación y Marco Teórico**
 
@@ -128,7 +125,7 @@ Con el motor finalizado, se desarrolló una interfaz de gestión remota mediante
 
 La fase de cierre se dedicó a un riguroso proceso de control de calidad. Se realizaron pruebas de backtesting con datos no vistos (Out-of-sample) y simulaciones de estrés (Monte Carlo) para asegurar la robustez del algoritmo ante diferentes escenarios de mercado. Asimismo, se verificó la estabilidad del sistema de fallback para garantizar la continuidad de los datos
 
-### 5.2 Gestión de Riesgos
+## Gestión de Riesgos
 
 **Ruptura de Cointegración (Cambio Estructural)**
 
@@ -143,7 +140,7 @@ La fase de cierre se dedicó a un riguroso proceso de control de calidad. Se rea
 -Mitigación: Se ha implementado un sistema de redundancia o fallback automático. En caso de que la fuente de datos principal falle, el software cambia instantáneamente a una fuente secundaria sin interrumpir la ejecución. Asimismo, el Bot de Telegram actúa como monitor de seguridad, enviando una alerta inmediata al móvil del usuario si detecta cualquier error crítico en la descarga de datos o en la ejecución del código.
 
 
-### 5.3 Calidad
+## Calidad
 
 **Robustez Estadística y Validación de Modelos**
 
@@ -625,8 +622,8 @@ Guardados en `graficos/` con estilo dark profesional. Generados con `--modo eval
 |---|---|
 | Período analizado | 2020-01-02 → 2026-05-13 |
 | Capital inicial | $100,000 |
-| Half-life del spread | 5.0 barras |
-| Ventana z-score | 5 barras |
+| Half-life del spread | 5.0 horas |
+| Ventana z-score | 5 horas |
 | Umbral de entrada | Z > ±2.0 |
 | Stop-loss | Z > ±3.5 |
 
@@ -679,14 +676,20 @@ La tabla de trades calcula el beneficio midiendo cuánto se movió ese spread. P
 
 ## Conclusiones
 
-El principal aprendizaje de este proyecto es que en el arbitraje estadístico **saber cuándo no operar vale más que saber cuándo operar**. La estrategia naive de NOW/TYL ganó el 96% de sus 124 trades y aun así perdió casi todo el capital, porque las pocas operaciones malas ocurrieron en momentos en que las dos acciones ya no guardaban ninguna relación matemática entre sí. El sistema inteligente, en cambio, estuvo parado el 97.5% del tiempo y entró solo en las tres ventanas donde el modelo confirmó que la relación existía. Resultado: dos operaciones, las dos ganadoras, y un +82.9% neto.
+El presente proyecto demuestra que la automatización de estrategias de arbitraje estadístico es viable cuando se combina disciplina matemática, gestión del riesgo y arquitectura modular. Más allá del caso específico de NOW/TYL, el sistema comprobó su capacidad fundamental: identificar oportunidades de bajo riesgo en pares cointegrados y operar solo cuando las condiciones estadísticas son propicias.
 
-Esto también valida el diseño técnico central del proyecto. Usar un Filtro de Kalman en lugar de un ratio fijo permite que el modelo se adapte continuamente a cómo cambia la relación entre dos empresas a lo largo de años, evitando que señales calculadas con datos viejos generen entradas erróneas. Y la detección de régimen rolling garantiza que, aunque un par haya sido cointegrado en el pasado, el sistema no opere en él si hoy esa condición ya no se cumple.
-
-El resultado con NOW/TYL no es un caso de éxito espectacular — el Sharpe es modesto y el drawdown rozó el límite del 15% — pero sí es una demostración honesta de que la arquitectura funciona como fue diseñada: filtra el ruido, controla el riesgo y genera beneficio real operando en el momento correcto.
+La verdadera innovación no reside en predecir movimientos, sino en reconocer cuándo no operar. El uso del Filtro de Kalman y la detección dinámica de regímenes transforman el pairs trading de un ejercicio especulativo en un proceso disciplinado y reproducible. Aunque los resultados muestran márgenes de beneficio reales y controlados, el proyecto evidencia también las limitaciones del trading estadístico puro: ventanas reducidas de oportunidad, dependencia crítica de la calidad de datos y el desafío permanente de evitar el overfitting. Estos hallazgos abren la puerta tanto a aplicaciones operacionales en fondos de inversión como a investigaciones futuras que combinen estas técnicas con inteligencia artificial y detección adaptativa de cambios en el mercado.
 
 ---
 
 ## Próximos Pasos
+
+**1. Implementar Alpaca para operación en tiempo real**
+
+El paso natural después de validar el sistema mediante backtesting es conectarlo directamente con una broker real. Esto significa crear un módulo que envíe órdenes automáticas a Alpaca, permitiendo que el algoritmo ejecute trades sin intervención manual. Se comenzaría con una cuenta de simulación (papel) en Alpaca para verificar que la ejecución funciona correctamente, y después escalar a capital real con tamaños controlados. El sistema debe gestionar la confirmación de órdenes, el seguimiento de posiciones abiertas y el cierre automático cuando las señales lo indiquen.
+
+**2. Incorporar machine learning para mejorar las señales**
+
+El sistema actual se basa en reglas estadísticas fijas (z-score, filtros de entrada/salida). Una mejora significativa sería entrenar un modelo de aprendizaje automático que aprenda patrones complejos en el comportamiento histórico de los spreads y prediga con mayor precisión cuándo ocurrirá la reversión. Esto podría reducir falsos positivos y mejorar el ratio de ganancias sin aumentar el riesgo. El modelo se entrenaría con datos de 2020 a 2024 y se validaría únicamente con 2025-2026 para garantizar que generaliza correctamente.
 
 
