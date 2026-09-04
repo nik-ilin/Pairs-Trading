@@ -1,15 +1,6 @@
-# Datos y análisis
-yfinance>=0.2.40
-pandas>=2.0.0
-numpy>=1.26.0
-statsmodels>=0.14.0
-scipy>=1.12.0
-
-# Gráficos
-matplotlib>=3.8.0
-
-# Alpaca — datos intradiarios y ejecución de órdenes
-alpaca-py>=0.26.0
-
-# Variables de entorno
-python-dotenv>=1.0.0
+yfinance>=0.2.40,<2
+pandas>=2.0,<4
+numpy>=1.26,<3
+statsmodels>=0.14,<1
+scipy>=1.12,<2
+matplotlib>=3.8,<4

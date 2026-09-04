@@ -1,80 +1,58 @@
-"""
-main.py — Orquestador principal del sistema de pairs trading.
-
-Modos de ejecución (--modo):
-  scan     : detecta pares cointegrados con datos horarios de Alpaca (últimos 12 meses)
-  diario   : verifica pares activos y genera señales del día
-  backtest : backtesting out-of-sample de un par con datos Alpaca diarios
-  evaluar  : genera gráficos de análisis para un par específico
-  full     : scan + backtest de los mejores pares
-
-Uso:
-  python main.py --modo scan
-  python main.py --modo diario
-  python main.py --modo backtest --par AAPL MSFT
-  python main.py --modo backtest --par AAPL MSFT --optimizar --walk-forward --graficos
-  python main.py --modo evaluar --par KO PEP
-  python main.py --modo full
-"""
+"""Command-line interface for the research workflow."""
 
 import argparse
 import warnings
 
 import pandas as pd
 
-from datos import (
-    obtener_sp500,
-    filtrar_universo_interactivo,
-    descargar_precios_alpaca,
-    descargar_ohlcv_horario,
-    filtrar_datos,
-)
-from deteccion import (
-    escanear_todos_los_pares,
-    guardar_pares,
-    cargar_pares,
-    top_pares,
-    estabilidad_rolling,
-    diagnostico_madurez_cointegracion,
-)
-from backtesting import (
-    backtest_completo,
-    paper_trading_historico,
-    ParametrosBacktest,
-    optimizar_parametros,
-    walk_forward,
-)
 from automatizacion import (
     ejecutar_pipeline_diario,
     ejecutar_scan_semanal,
-    actualizar_estado,
-    imprimir_resumen_diario,
     filtrar_por_backtest_smart,
+    imprimir_resumen_diario,
+)
+from backtesting import (
+    ParametrosBacktest,
+    backtest_completo,
+    optimizar_parametros,
+    walk_forward,
+)
+from datos import (
+    descargar_ohlcv_horario,
+    descargar_precios,
+    filtrar_datos,
+    filtrar_universo_interactivo,
+    obtener_sp500,
+)
+from deteccion import (
+    diagnostico_madurez_cointegracion,
+    estabilidad_rolling,
+    guardar_pares,
+    top_pares,
 )
 from metricas import reporte_completo
 
 warnings.filterwarnings("ignore")
 
 
-# ── Helpers interactivos ──────────────────────────────────────────────────────
-
 def _seleccionar_pares_interactivo(pares_df: pd.DataFrame) -> pd.DataFrame:
-    """Muestra los pares encontrados y permite elegir cuáles guardar."""
     if pares_df.empty:
         return pares_df
 
     pares_df = pares_df.reset_index(drop=True)
 
-    print(f"\n{'='*72}")
+    print(f"\n{'=' * 72}")
     print(f"  PARES COINTEGRADOS ENCONTRADOS: {len(pares_df)}")
-    print(f"{'='*72}")
+    print(f"{'=' * 72}")
     print(f"  {'#':>4}  {'Par':<14}  {'Score':>7}  {'Traza':>7}  {'p-EG':>7}  {'Obs':>6}")
-    print(f"  {'─'*4}  {'─'*14}  {'─'*7}  {'─'*7}  {'─'*7}  {'─'*6}")
+    print(f"  {'-' * 4}  {'-' * 14}  {'-' * 7}  {'-' * 7}  {'-' * 7}  {'-' * 6}")
 
     for i, row in pares_df.iterrows():
         par = f"{row['ticker1']}/{row['ticker2']}"
-        print(f"  {i+1:>4}  {par:<14}  {row['score']:>7.4f}  {row['traza']:>7.2f}"
-              f"  {row['p_value_eg']:>7.4f}  {row['n_obs']:>6}")
+        print(
+            f"  {i + 1:>4}  {par:<14}  {row['score']:>7.4f}  {row['traza']:>7.2f}"
+            f"  {row['p_value_eg']:>7.4f}  {row['n_obs']:>6}"
+        )
 
     print()
     print("  Score  = fuerza de cointegración Johansen (>1 válido, mayor = mejor)")
@@ -110,30 +88,27 @@ def _seleccionar_pares_interactivo(pares_df: pd.DataFrame) -> pd.DataFrame:
 
 
 def _seleccionar_pares_smart(pares_df: pd.DataFrame, n_evaluados: int) -> pd.DataFrame:
-    """
-    Muestra los pares que superaron el filtro SMART y permite elegir cuáles guardar.
-    Columns esperadas: ticker1, ticker2, score, sharpe, mdd, cagr, n_trades, win_rate.
-    """
-    from config import OBJETIVO_SHARPE, OBJETIVO_MDD
+    from config import OBJETIVO_MDD, OBJETIVO_SHARPE
 
     if pares_df.empty:
         return pares_df
 
     pares_df = pares_df.reset_index(drop=True)
 
-    print(f"\n{'='*86}")
+    print(f"\n{'=' * 86}")
     print(f"  PARES QUE PASAN EL FILTRO SMART: {len(pares_df)} de {n_evaluados}")
-    print(f"  Criterios: Sharpe ≥ {OBJETIVO_SHARPE:.1f}  |  MDD ≤ {abs(OBJETIVO_MDD)*100:.0f}%")
-    print(f"{'='*86}")
-    print(f"  {'#':>4}  {'Par':<14}  {'Score':>7}  {'Sharpe':>7}  {'MDD%':>6}  "
-          f"{'CAGR%':>6}  {'Trades':>7}  {'WinRate':>8}")
-    print(f"  {'─'*4}  {'─'*14}  {'─'*7}  {'─'*7}  {'─'*6}  "
-          f"{'─'*6}  {'─'*7}  {'─'*8}")
+    print(f"  Criterios: Sharpe -- {OBJETIVO_SHARPE:.1f}  |  MDD -- {abs(OBJETIVO_MDD) * 100:.0f}%")
+    print(f"{'=' * 86}")
+    print(
+        f"  {'#':>4}  {'Par':<14}  {'Score':>7}  {'Sharpe':>7}  {'MDD%':>6}  "
+        f"{'CAGR%':>6}  {'Trades':>7}  {'WinRate':>8}"
+    )
+    print(f"  {'-' * 4}  {'-' * 14}  {'-' * 7}  {'-' * 7}  {'-' * 6}  {'-' * 6}  {'-' * 7}  {'-' * 8}")
 
     for i, row in pares_df.iterrows():
         par = f"{row['ticker1']}/{row['ticker2']}"
         print(
-            f"  {i+1:>4}  {par:<14}  {row.get('score', 0):>7.4f}  "
+            f"  {i + 1:>4}  {par:<14}  {row.get('score', 0):>7.4f}  "
             f"{row.get('sharpe', 0):>+7.2f}  {row.get('mdd', 0):>6.1f}  "
             f"{row.get('cagr', 0):>6.1f}  {row.get('n_trades', 0):>7}  "
             f"{row.get('win_rate', 0):>7.1f}%"
@@ -141,8 +116,8 @@ def _seleccionar_pares_smart(pares_df: pd.DataFrame, n_evaluados: int) -> pd.Dat
 
     print()
     print("  Score  = fuerza de cointegración Johansen (mayor = mejor)")
-    print("  Sharpe = ratio de Sharpe del backtest (objetivo: ≥ 1.0)")
-    print("  MDD%   = máximo drawdown del backtest  (objetivo: ≤ 15%)")
+    print("  Sharpe = ratio de Sharpe del backtest (objetivo: -- 1.0)")
+    print("  MDD%   = máximo drawdown del backtest  (objetivo: -- 15%)")
     print()
     print("  ¿Qué pares deseas guardar?")
     print("    Números por coma  ->  ej: 1,3,5")
@@ -164,7 +139,7 @@ def _seleccionar_pares_smart(pares_df: pd.DataFrame, n_evaluados: int) -> pd.Dat
                 indices.update(range(int(a) - 1, int(b)))
             else:
                 indices.add(int(parte) - 1)
-        validos   = [i for i in sorted(indices) if 0 <= i < len(pares_df)]
+        validos = [i for i in sorted(indices) if 0 <= i < len(pares_df)]
         resultado = pares_df.iloc[validos].reset_index(drop=True)
         print(f"  [OK] {len(resultado)} pares seleccionados.")
         return resultado
@@ -174,7 +149,6 @@ def _seleccionar_pares_smart(pares_df: pd.DataFrame, n_evaluados: int) -> pd.Dat
 
 
 def _seleccionar_de_csv(top_n: int) -> list[dict]:
-    """Carga el CSV de pares y permite elegir cuáles backtestar."""
     try:
         pares_df = top_pares(n=top_n)
     except FileNotFoundError:
@@ -183,15 +157,15 @@ def _seleccionar_de_csv(top_n: int) -> list[dict]:
 
     pares_df = pares_df.reset_index(drop=True)
 
-    print(f"\n{'='*72}")
+    print(f"\n{'=' * 72}")
     print(f"  PARES DISPONIBLES (top {top_n})")
-    print(f"{'='*72}")
+    print(f"{'=' * 72}")
     print(f"  {'#':>4}  {'Par':<14}  {'Score':>7}  {'p-EG':>7}")
-    print(f"  {'─'*4}  {'─'*14}  {'─'*7}  {'─'*7}")
+    print(f"  {'-' * 4}  {'-' * 14}  {'-' * 7}  {'-' * 7}")
 
     for i, row in pares_df.iterrows():
         par = f"{row['ticker1']}/{row['ticker2']}"
-        print(f"  {i+1:>4}  {par:<14}  {row['score']:>7.4f}  {row['p_value_eg']:>7.4f}")
+        print(f"  {i + 1:>4}  {par:<14}  {row['score']:>7.4f}  {row['p_value_eg']:>7.4f}")
 
     print()
     print("  ¿Qué pares deseas backtestar?")
@@ -219,47 +193,36 @@ def _seleccionar_de_csv(top_n: int) -> list[dict]:
         return pares_df.to_dict("records")
 
 
-# ── Helpers de presentación ───────────────────────────────────────────────────
-
 _ICONO_MADUREZ = {
-    "RECIENTE":    "◈",
-    "CONSOLIDADA": "◉",
-    "MADURA":      "◎",
-    "AGOTADA":     "○",
-    "INESTABLE":   "◌",
+    "RECIENTE": "-",
+    "CONSOLIDADA": "-",
+    "MADURA": "-",
+    "AGOTADA": "-",
+    "INESTABLE": "-",
     "DESCONOCIDO": "?",
 }
 
 
 def _imprimir_madurez(madurez: dict) -> None:
-    """Bloque visual de diagnóstico de madurez de cointegración."""
     estado = madurez.get("estado", "DESCONOCIDO")
     if estado == "DESCONOCIDO":
         return
-    icono   = _ICONO_MADUREZ.get(estado, "?")
-    score   = madurez.get("score_reciente", 0.0)
-    activa  = madurez.get("fraccion_activa", 0.0)
-    tend    = madurez.get("tendencia", "—")
-    desc    = madurez.get("descripcion", "")
-    ancho   = 56
-    print(f"  ┌{'─'*ancho}┐")
-    print(f"  │  {icono} MADUREZ: {estado:<10}  {tend:<12}{'':>{ancho-38}}│")
-    print(f"  │  Score reciente: {score:.2f}  |  Activa: {activa*100:.0f}% del período{'':>{ancho-52}}│")
-    print(f"  │  {desc[:ancho-2]:<{ancho-2}}│")
+    icono = _ICONO_MADUREZ.get(estado, "?")
+    score = madurez.get("score_reciente", 0.0)
+    activa = madurez.get("fraccion_activa", 0.0)
+    tend = madurez.get("tendencia", "-")
+    desc = madurez.get("descripcion", "")
+    ancho = 56
+    print(f"  --{'-' * ancho}-")
+    print(f"  -  {icono} MADUREZ: {estado:<10}  {tend:<12}{'':>{ancho - 38}}-")
+    print(f"  -  Score reciente: {score:.2f}  |  Activa: {activa * 100:.0f}% del período{'':>{ancho - 52}}-")
+    print(f"  -  {desc[: ancho - 2]:<{ancho - 2}}-")
     if len(desc) > ancho - 2:
-        print(f"  │  {desc[ancho-2:2*(ancho-2)]:<{ancho-2}}│")
-    print(f"  └{'─'*ancho}┘")
+        print(f"  -  {desc[ancho - 2 : 2 * (ancho - 2)]:<{ancho - 2}}-")
+    print(f"  -{'-' * ancho}-")
 
-
-# ── Modos de ejecución ────────────────────────────────────────────────────────
 
 def modo_scan(args) -> None:
-    """
-    Scan semanal: descarga datos horarios y busca pares cointegrados ahora.
-    Siempre fuerza un scan nuevo independientemente de la antigüedad del CSV.
-    Aplica un segundo filtro SMART (Sharpe ≥ 1.0, MDD ≤ 15%) mediante backtest
-    rápido sobre datos diarios antes de ofrecer la lista al usuario.
-    """
     print("\n[MODO: SCAN]")
 
     if getattr(args, "interactivo", True):
@@ -273,15 +236,12 @@ def modo_scan(args) -> None:
         print("[!] No se encontraron pares cointegrados.")
         return
 
-    # Segundo filtro: objetivos SMART mediante backtest rápido con datos diarios
     tickers_bt = list(set(pares["ticker1"].tolist() + pares["ticker2"].tolist()))
     print(f"\n  Descargando datos diarios para filtro SMART ({len(tickers_bt)} tickers)...")
-    precios_diarios = filtrar_datos(descargar_precios_alpaca(tickers_bt))
+    precios_diarios = filtrar_datos(descargar_precios(tickers_bt))
 
     if not precios_diarios.empty:
-        pares_smart, todos = filtrar_por_backtest_smart(
-            pares, precios_diarios, verbose=True
-        )
+        pares_smart, todos = filtrar_por_backtest_smart(pares, precios_diarios, verbose=True)
         n_pasan = len(pares_smart)
         n_total = len(todos)
 
@@ -295,8 +255,7 @@ def modo_scan(args) -> None:
             guardar_pares(pares)
             return
 
-        # Ninguno pasó el filtro SMART
-        print("\n  [!] Ningún par superó el filtro SMART (Sharpe ≥ 1.0 y MDD ≤ 15%).")
+        print("\n  [!] Ningún par superó el filtro SMART (Sharpe -- 1.0 y MDD -- 15%).")
         if getattr(args, "interactivo", True):
             print("  ¿Guardar igualmente los pares cointegrados sin filtro SMART? [s/N]: ", end="")
             resp = input().strip().lower()
@@ -307,18 +266,13 @@ def modo_scan(args) -> None:
                 print("  [OK] No se guardó ningún par.")
         return
 
-    # Sin datos diarios: saltar filtro SMART y ofrecer lista original
-    print("\n  [WARN] Sin datos diarios disponibles — filtro SMART omitido.")
+    print("\n  [WARN] Sin datos diarios disponibles - filtro SMART omitido.")
     if getattr(args, "interactivo", True):
         pares = _seleccionar_pares_interactivo(pares)
         guardar_pares(pares)
 
 
 def modo_diario(args) -> None:
-    """
-    Pipeline diario: verifica cointegración de pares activos y genera señales.
-    Ejecutar cada día en la apertura del mercado.
-    """
     print("\n[MODO: DIARIO]")
 
     pares_lista = None
@@ -331,16 +285,11 @@ def modo_diario(args) -> None:
 
     df_señales = ejecutar_pipeline_diario(top_n=args.top_n, pares_lista=pares_lista, verbose=True)
     imprimir_resumen_diario(df_señales)
-    if not df_señales.empty:
-        estado = actualizar_estado(df_señales)
-        print(f"[INFO] Posiciones abiertas: {len(estado)}")
 
 
 def modo_backtest(args) -> None:
-    """Backtesting out-of-sample con datos diarios de Alpaca (2020-presente)."""
     print("\n[MODO: BACKTEST]")
 
-    # Determinar qué pares backtestar
     if args.par:
         pares_lista = [{"ticker1": args.par[0], "ticker2": args.par[1]}]
     elif getattr(args, "interactivo", True):
@@ -354,14 +303,13 @@ def modo_backtest(args) -> None:
             print("[!] Ejecuta primero --modo scan.")
             return
 
-    # Descargar datos diarios Alpaca para los tickers necesarios
     tickers = list({t for p in pares_lista for t in (p["ticker1"], p["ticker2"])})
     print(f"\n  Descargando datos diarios para {len(tickers)} tickers...")
-    precios = descargar_precios_alpaca(tickers)
+    precios = descargar_precios(tickers, inicio=args.inicio, fin=args.fin)
     precios = filtrar_datos(precios)
 
     if precios.empty:
-        print("[!] Sin datos. Verifica las credenciales de Alpaca.")
+        print("[!] Sin datos de Yahoo Finance para el intervalo solicitado.")
         return
 
     for fila in pares_lista:
@@ -372,22 +320,29 @@ def modo_backtest(args) -> None:
             print(f"  [WARN] {nombre}: datos insuficientes. Omitiendo.")
             continue
 
-        print(f"\n{'─'*50}")
+        print(f"\n{'-' * 50}")
         print(f"  {nombre}")
-        print(f"{'─'*50}")
+        print(f"{'-' * 50}")
 
         rolling = estabilidad_rolling(precios[[t1, t2]], t1, t2)
         _imprimir_madurez(diagnostico_madurez_cointegracion(rolling))
 
         params = ParametrosBacktest()
+        resultado_oos = None
         if args.optimizar:
             try:
-                params, _ = optimizar_parametros(precios[[t1, t2]], t1, t2)
+                params, tabla_grid = optimizar_parametros(precios[[t1, t2]], t1, t2)
+                resultado_oos = tabla_grid.attrs.get("resultado_oos")
             except Exception as e:
                 print(f"  [WARN] Grid search falló: {e}. Usando parámetros por defecto.")
 
-        resultado = backtest_completo(precios[[t1, t2]], t1, t2, params,
-                                      imprimir_reporte=True)
+        resultado = resultado_oos or backtest_completo(precios[[t1, t2]], t1, t2, params, imprimir_reporte=True)
+        if resultado_oos is not None:
+            reporte_completo(
+                resultado["retornos"],
+                resultado["trades"].get("pnl") if not resultado["trades"].empty else None,
+                nombre=f"{nombre} - TEST NO TOCADO",
+            )
 
         if args.walk_forward:
             print(f"\n  Walk-Forward: {nombre}")
@@ -396,7 +351,8 @@ def modo_backtest(args) -> None:
         if args.graficos:
             try:
                 from evaluacion import generar_informe_completo, grafico_rolling_cointegracion
-                ohlcv   = descargar_ohlcv_horario(tickers, dias_atras=365)
+
+                ohlcv = descargar_ohlcv_horario(tickers, dias_atras=365)
                 rolling = estabilidad_rolling(ohlcv["close"], t1, t2)
                 grafico_rolling_cointegracion(rolling, nombre_par=nombre)
                 generar_informe_completo(resultado, nombre_par=nombre)
@@ -405,7 +361,6 @@ def modo_backtest(args) -> None:
 
 
 def modo_evaluar(args) -> None:
-    """Genera gráficos de análisis completos para uno o más pares."""
     print("\n[MODO: EVALUAR]")
 
     if args.par:
@@ -423,7 +378,7 @@ def modo_evaluar(args) -> None:
 
     tickers = list({t for p in pares_lista for t in (p["ticker1"], p["ticker2"])})
     print(f"  Descargando datos para {len(tickers)} tickers...")
-    precios = descargar_precios_alpaca(tickers)
+    precios = descargar_precios(tickers, inicio=args.inicio, fin=args.fin)
 
     for fila in pares_lista:
         t1, t2 = fila["ticker1"], fila["ticker2"]
@@ -433,19 +388,20 @@ def modo_evaluar(args) -> None:
             print(f"[!] Sin datos para {nombre}.")
             continue
 
-        print(f"\n{'─'*50}")
+        print(f"\n{'-' * 50}")
         print(f"  {nombre}")
-        print(f"{'─'*50}")
+        print(f"{'-' * 50}")
 
         rolling = estabilidad_rolling(precios[[t1, t2]], t1, t2)
         _imprimir_madurez(diagnostico_madurez_cointegracion(rolling))
 
-        params    = ParametrosBacktest()
+        params = ParametrosBacktest()
         resultado = backtest_completo(precios[[t1, t2]], t1, t2, params, imprimir_reporte=True)
 
         try:
             from evaluacion import generar_informe_completo, grafico_rolling_cointegracion
-            ohlcv   = descargar_ohlcv_horario([t1, t2], dias_atras=365)
+
+            ohlcv = descargar_ohlcv_horario([t1, t2], dias_atras=365)
             rolling = estabilidad_rolling(ohlcv["close"], t1, t2)
             grafico_rolling_cointegracion(rolling, nombre_par=nombre)
             generar_informe_completo(resultado, nombre_par=nombre)
@@ -453,134 +409,84 @@ def modo_evaluar(args) -> None:
             print("  [WARN] evaluacion.py no disponible.")
 
 
-def modo_paper(args) -> None:
-    """
-    Paper trading histórico: opera solo durante períodos de cointegración confirmada.
-
-    Flujo:
-      1. Test EG rolling cada 5 barras — detecta cuándo el par está cointegrado
-      2. Solo activa el trading tras N tests consecutivos positivos (evita falsas alarmas)
-      3. Cierra la posición y pausa ante M tests consecutivos fallidos (ruptura)
-      4. Compara resultados con el backtest naive (sin filtro de régimen)
-    """
-    print("\n[MODO: PAPER TRADING]")
-
-    if args.par:
-        pares_lista = [{"ticker1": args.par[0], "ticker2": args.par[1]}]
-    elif getattr(args, "interactivo", True):
-        pares_lista = _seleccionar_de_csv(args.top_n)
-        if not pares_lista:
-            return
-    else:
-        try:
-            pares_lista = top_pares(n=args.top_n).to_dict("records")
-        except FileNotFoundError:
-            print("[!] Ejecuta primero --modo scan.")
-            return
-
-    tickers = list({t for p in pares_lista for t in (p["ticker1"], p["ticker2"])})
-    print(f"\n  Descargando datos diarios para {len(tickers)} tickers...")
-    precios = descargar_precios_alpaca(tickers)
-    precios = filtrar_datos(precios)
-
-    if precios.empty:
-        print("[!] Sin datos. Verifica las credenciales de Alpaca.")
-        return
-
-    for fila in pares_lista:
-        t1, t2 = fila["ticker1"], fila["ticker2"]
-        nombre = f"{t1}/{t2}"
-
-        if t1 not in precios.columns or t2 not in precios.columns:
-            print(f"  [WARN] {nombre}: datos insuficientes. Omitiendo.")
-            continue
-
-        print(f"\n{'─'*50}")
-        print(f"  {nombre}")
-        print(f"{'─'*50}")
-
-        rolling = estabilidad_rolling(precios[[t1, t2]], t1, t2)
-        _imprimir_madurez(diagnostico_madurez_cointegracion(rolling))
-
-        try:
-            resultado = paper_trading_historico(
-                precios[[t1, t2]], t1, t2, verbose=True
-            )
-        except ValueError as e:
-            print(f"  [WARN] {nombre}: {e}")
-            continue
-
-        if args.graficos:
-            try:
-                from evaluacion import generar_informe_completo
-                generar_informe_completo(resultado, nombre_par=f"{nombre}_paper")
-            except ImportError:
-                print("  [WARN] evaluacion.py no disponible.")
-
-
 def modo_full(args) -> None:
-    """Pipeline completo no interactivo: scan → backtest top 5 pares."""
     print("\n[MODO: FULL PIPELINE]")
-    args.interactivo  = False
-    args.top_n        = 5
-    args.optimizar    = True
+    args.interactivo = False
+    args.top_n = 5
+    args.optimizar = True
     args.walk_forward = False
-    args.graficos     = False
-    args.par          = None
+    args.graficos = False
+    args.par = None
     modo_scan(args)
     modo_backtest(args)
 
 
-# ── CLI ───────────────────────────────────────────────────────────────────────
-
 def main():
     parser = argparse.ArgumentParser(
-        description="Sistema de Pairs Trading — Arbitraje Estadístico",
+        description="Sistema de Pairs Trading - Arbitraje Estadístico",
         formatter_class=argparse.RawTextHelpFormatter,
     )
     parser.add_argument(
         "--modo",
-        choices=["scan", "diario", "backtest", "paper", "evaluar", "full"],
+        choices=["scan", "diario", "backtest", "evaluar", "full"],
         default="diario",
         help=(
-            "scan     : detectar pares cointegrados (datos horarios, 12 meses)\n"
-            "diario   : verificar pares activos y generar señales del día\n"
-            "backtest : backtesting out-of-sample de un par\n"
-            "paper    : paper trading histórico con detección dinámica de régimen\n"
+            "scan     : exploración histórica con Yahoo Finance diario\n"
+            "diario   : fotografía manual de la señal más reciente\n"
+            "backtest : backtest temporal de un par\n"
             "evaluar  : gráficos de análisis para un par\n"
             "full     : scan + backtest de los mejores pares"
         ),
     )
     parser.add_argument(
-        "--par", nargs=2, metavar=("TICKER1", "TICKER2"),
-        help="Par específico (ej: --par AAPL MSFT)"
+        "--par",
+        nargs=2,
+        metavar=("TICKER1", "TICKER2"),
+        help="Par específico (ej: --par AAPL MSFT)",
     )
     parser.add_argument(
-        "--top-n", type=int, default=10, dest="top_n",
-        help="Número de pares a evaluar (default: 10)"
+        "--top-n",
+        type=int,
+        default=10,
+        dest="top_n",
+        help="Número de pares a evaluar (default: 10)",
     )
     parser.add_argument(
-        "--optimizar", action="store_true",
-        help="Optimizar parámetros con grid search (in-sample/out-of-sample)"
+        "--optimizar",
+        action="store_true",
+        help="Optimizar parámetros con grid search (in-sample/out-of-sample)",
     )
     parser.add_argument(
-        "--walk-forward", action="store_true", dest="walk_forward",
-        help="Ejecutar walk-forward validation"
+        "--walk-forward",
+        action="store_true",
+        dest="walk_forward",
+        help="Ejecutar walk-forward validation",
+    )
+    parser.add_argument("--graficos", action="store_true", help="Generar gráficos de evaluación")
+    parser.add_argument(
+        "--inicio",
+        default=None,
+        help="Fecha inicial inclusiva (YYYY-MM-DD); por defecto usa config.py",
     )
     parser.add_argument(
-        "--graficos", action="store_true",
-        help="Generar gráficos de evaluación"
+        "--fin",
+        default=None,
+        help="Fecha final exclusiva (YYYY-MM-DD); por defecto usa config.py",
     )
 
     args = parser.parse_args()
 
+    from config import FIN_DEFAULT, INICIO_DEFAULT
+
+    args.inicio = args.inicio or INICIO_DEFAULT
+    args.fin = args.fin or FIN_DEFAULT
+
     modos = {
-        "scan":     modo_scan,
-        "diario":   modo_diario,
+        "scan": modo_scan,
+        "diario": modo_diario,
         "backtest": modo_backtest,
-        "paper":    modo_paper,
-        "evaluar":  modo_evaluar,
-        "full":     modo_full,
+        "evaluar": modo_evaluar,
+        "full": modo_full,
     }
 
     modos[args.modo](args)

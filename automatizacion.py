@@ -1,20 +1,6 @@
-"""
-automatizacion.py — Pipelines de ejecución automática.
-
-Dos pipelines con frecuencias distintas:
-
-  Pipeline diario (cada día, apertura de mercado):
-    1. Verifica que los pares activos siguen cointegrados (EG sobre datos horarios)
-    2. Genera señales del día para los pares que siguen válidos
-
-  Pipeline semanal (cada 7 días, fin de semana):
-    1. Descarga datos horarios de los últimos 12 meses para todo el S&P 500
-    2. Ejecuta el scan completo EG + Johansen
-    3. Actualiza pares_cointegrados.csv
-"""
+"""Manual pair scanning and latest-signal snapshot workflows."""
 
 import os
-import json
 import warnings
 from datetime import datetime, timedelta
 
@@ -22,77 +8,46 @@ import numpy as np
 import pandas as pd
 from statsmodels.tsa.stattools import adfuller, coint
 
-from datos import descargar_ohlcv_horario, obtener_sp500, descargar_precios_alpaca, filtrar_datos
+from config import (
+    HORAS_DIA,
+    MIN_OBS_SEÑAL,
+    OBJETIVO_MDD,
+    OBJETIVO_SHARPE,
+    UMBRAL_EG,
+    VENTANA_COINT_ACTIVA,
+)
+from datos import descargar_ohlcv_horario, descargar_precios, filtrar_datos, obtener_sp500
+from deteccion import (
+    cargar_pares,
+    diagnostico_madurez_simple,
+    escanear_todos_los_pares,
+    guardar_pares,
+)
 from spread import (
+    Señal,
     calcular_spread_kalman,
     calcular_zscore,
-    calcular_half_life,
-    parametros_ou,
     generar_señales,
-    Señal,
+    parametros_ou,
 )
-from deteccion import (
-    escanear_todos_los_pares, guardar_pares, cargar_pares, test_johansen,
-    diagnostico_madurez_simple,
-)
-from config import (
-    MIN_OBS_HORARIO, UMBRAL_EG, VENTANA_COINT_ACTIVA, HORAS_DIA,
-    TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID,
-    OBJETIVO_SHARPE, OBJETIVO_MDD,
-)
-from analista_ia import analizar_señales
-
-
-def notificar_telegram(mensaje: str, html: bool = True) -> None:
-    """
-    Envía una notificación al chat de Telegram configurado en .env.
-    Usa HTTP directo (urllib) — no requiere python-telegram-bot.
-    No hace nada si el token o el chat_id no están configurados.
-    """
-    import urllib.request
-    import urllib.parse
-
-    if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
-        return
-
-    url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
-    # Dividir en trozos de ≤4000 chars para no superar el límite de Telegram
-    texto = mensaje
-    while texto:
-        trozo, texto = (texto[:4000], texto[4000:]) if len(texto) > 4000 else (texto, "")
-        datos: dict = {"chat_id": TELEGRAM_CHAT_ID, "text": trozo}
-        if html:
-            datos["parse_mode"] = "HTML"
-        try:
-            data = urllib.parse.urlencode(datos).encode()
-            urllib.request.urlopen(url, data, timeout=10)
-        except Exception as e:
-            print(f"[TELEGRAM] Error al enviar notificación: {e}")
 
 
 def _bpd(index: pd.DatetimeIndex) -> float:
-    """Barras por día de negociación: HORAS_DIA para horario, 1.0 para diario."""
     if len(index) < 10:
         return 1.0
     n_dias = pd.Series(index).dt.date.nunique()
     return HORAS_DIA if (len(index) / max(n_dias, 1)) > 2 else 1.0
 
+
 warnings.filterwarnings("ignore")
 
 SEÑALES_PATH = os.path.join(os.path.dirname(__file__), "señales_diarias.csv")
-ESTADO_PATH  = os.path.join(os.path.dirname(__file__), "estado_posiciones.json")
-PARES_PATH   = os.path.join(os.path.dirname(__file__), "pares_cointegrados.csv")
+PARES_PATH = os.path.join(os.path.dirname(__file__), "pares_cointegrados.csv")
 
-DIAS_ENTRE_SCANS = 7   # días entre scans completos de nuevos pares
+DIAS_ENTRE_SCANS = 7
 
-
-# ── Scheduling: ¿cuándo ejecutar cada pipeline? ───────────────────────────────
 
 def scan_necesario(path: str = PARES_PATH, dias: int = DIAS_ENTRE_SCANS) -> bool:
-    """
-    Devuelve True si el CSV de pares no existe o tiene más de `dias` días de antigüedad.
-    Determina si hay que ejecutar el scan semanal de nuevos pares.
-    """
     if not os.path.exists(path):
         return True
     edad = datetime.now() - datetime.fromtimestamp(os.path.getmtime(path))
@@ -100,52 +55,37 @@ def scan_necesario(path: str = PARES_PATH, dias: int = DIAS_ENTRE_SCANS) -> bool
 
 
 def dias_desde_ultimo_scan(path: str = PARES_PATH) -> float | None:
-    """Devuelve los días desde el último scan, o None si no existe el CSV."""
     if not os.path.exists(path):
         return None
     return (datetime.now() - datetime.fromtimestamp(os.path.getmtime(path))).days
 
-
-# ── Pipeline semanal — scan de nuevos pares ───────────────────────────────────
 
 def ejecutar_scan_semanal(
     tickers: list[str] | None = None,
     forzar: bool = False,
     verbose: bool = True,
 ) -> pd.DataFrame:
-    """
-    Scan completo para encontrar pares cointegrados. Se ejecuta semanalmente.
-
-    Descarga datos horarios de los últimos 12 meses y aplica EG + Johansen
-    sobre todos los pares posibles. Guarda el resultado en pares_cointegrados.csv.
-
-    Args:
-        tickers: Lista de tickers. Si None, usa el S&P 500 completo.
-        forzar:  Si True, ejecuta aunque el CSV sea reciente.
-        verbose: Imprime progreso.
-    """
     if not forzar and not scan_necesario():
         dias = dias_desde_ultimo_scan()
         if verbose:
-            print(f"[INFO] Scan no necesario. Último scan hace {dias} días "
-                  f"(próximo en {DIAS_ENTRE_SCANS - dias} días).")
+            print(
+                f"[INFO] Scan no necesario. Último scan hace {dias} días (próximo en {DIAS_ENTRE_SCANS - dias} días)."
+            )
         return cargar_pares()
 
     if verbose:
-        print(f"\n[SCAN SEMANAL] {datetime.now().strftime('%Y-%m-%d %H:%M')}")
-        print(f"  Descargando datos horarios (últimos 12 meses)...")
+        print(f"\n[SCAN HISTÓRICO MANUAL] {datetime.now().strftime('%Y-%m-%d %H:%M')}")
+        print("  Descargando datos diarios históricos de Yahoo Finance...")
 
     tickers = tickers or obtener_sp500()
 
-    # Datos horarios: 365 días hacia atrás cubre los 12 meses (≈1638 barras)
-    ohlcv = descargar_ohlcv_horario(tickers, dias_atras=365)
+    ohlcv = descargar_ohlcv_horario(tickers, dias_atras=365 * 7)
     df_close = ohlcv.get("close", pd.DataFrame())
 
     if df_close.empty:
-        print("[ERROR] Sin datos horarios. Verifica las credenciales de Alpaca.")
+        print("[ERROR] Yahoo Finance no devolvió datos diarios.")
         return pd.DataFrame()
 
-    # La caché puede contener más tickers que los solicitados — filtrar al universo pedido
     tickers_validos = [t for t in tickers if t in df_close.columns]
     if tickers_validos:
         df_close = df_close[tickers_validos]
@@ -158,8 +98,6 @@ def ejecutar_scan_semanal(
     return pares
 
 
-# ── Segundo filtro: objetivos SMART via backtest rápido ───────────────────────
-
 def filtrar_por_backtest_smart(
     pares_df: pd.DataFrame,
     precios_diarios: pd.DataFrame | None = None,
@@ -167,35 +105,22 @@ def filtrar_por_backtest_smart(
     obj_mdd_pct: float | None = None,
     verbose: bool = True,
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
-    """
-    Segundo filtro sobre los pares cointegrados: backtest rápido con datos diarios.
-
-    Para cada par corre MotorBacktest con parámetros por defecto y descarta los que
-    no alcanzan los objetivos SMART definidos en config.py:
-      · Sharpe ≥ OBJETIVO_SHARPE  (default 1.0)
-      · MDD    ≤ abs(OBJETIVO_MDD)*100  (default 15 %)
-
-    Si precios_diarios es None los descarga automáticamente de Alpaca.
-
-    Returns:
-        (pares_que_pasan_df, todos_con_métricas_df)
-        Ambos DataFrames incluyen las columnas originales más: sharpe, sortino,
-        mdd, cagr, n_trades, win_rate, profit_factor.
-    """
     from backtesting import MotorBacktest, ParametrosBacktest
 
-    min_sharpe = obj_sharpe   if obj_sharpe   is not None else OBJETIVO_SHARPE
-    max_mdd    = obj_mdd_pct  if obj_mdd_pct  is not None else abs(OBJETIVO_MDD) * 100
+    min_sharpe = obj_sharpe if obj_sharpe is not None else OBJETIVO_SHARPE
+    max_mdd = obj_mdd_pct if obj_mdd_pct is not None else abs(OBJETIVO_MDD) * 100
 
     if precios_diarios is None or precios_diarios.empty:
         tickers = list(set(pares_df["ticker1"].tolist() + pares_df["ticker2"].tolist()))
         if verbose:
             print(f"  Descargando datos diarios para {len(tickers)} tickers...")
-        precios_diarios = filtrar_datos(descargar_precios_alpaca(tickers))
+        precios_diarios = filtrar_datos(descargar_precios(tickers))
 
     if verbose:
-        print(f"\n[FILTRO SMART] Backtest rápido sobre {len(pares_df)} pares "
-              f"(Sharpe ≥ {min_sharpe:.1f}, MDD ≤ {max_mdd:.0f}%)...")
+        print(
+            f"\n[FILTRO SMART] Backtest rápido sobre {len(pares_df)} pares "
+            f"(Sharpe -- {min_sharpe:.1f}, MDD -- {max_mdd:.0f}%)..."
+        )
 
     resultados = []
     for _, row in pares_df.iterrows():
@@ -208,31 +133,33 @@ def filtrar_por_backtest_smart(
             continue
 
         try:
-            motor = MotorBacktest(
-                precios_diarios[[t1, t2]], t1, t2, ParametrosBacktest()
-            )
-            res  = motor.ejecutar()
-            m    = res["metricas"]
-            pasa = m["sharpe"] >= min_sharpe and m["mdd"] <= max_mdd
+            motor = MotorBacktest(precios_diarios[[t1, t2]], t1, t2, ParametrosBacktest())
+            res = motor.ejecutar()
+            m = res["metricas"]
+            pasa = m["sharpe"] >= min_sharpe and abs(m["mdd"]) <= max_mdd
 
-            resultados.append({
-                **row.to_dict(),
-                "sharpe":        m["sharpe"],
-                "sortino":       m["sortino"],
-                "mdd":           m["mdd"],
-                "cagr":          m["cagr"],
-                "n_trades":      m["n_trades"],
-                "win_rate":      m["win_rate"],
-                "profit_factor": m["profit_factor"],
-                "pasa_smart":    pasa,
-            })
+            resultados.append(
+                {
+                    **row.to_dict(),
+                    "sharpe": m["sharpe"],
+                    "sortino": m["sortino"],
+                    "mdd": m["mdd"],
+                    "cagr": m["cagr"],
+                    "n_trades": m["n_trades"],
+                    "win_rate": m["win_rate"],
+                    "profit_factor": m["profit_factor"],
+                    "pasa_smart": pasa,
+                }
+            )
 
             if verbose:
-                marca = "✓" if pasa else "✗"
-                tag   = "PASA   " if pasa else "NO PASA"
-                print(f"  {marca} {tag} | {nombre:<14} | "
-                      f"Sharpe={m['sharpe']:+.2f} | MDD={m['mdd']:.1f}% | "
-                      f"CAGR={m['cagr']:.1f}%")
+                marca = "OK" if pasa else "FAIL"
+                tag = "PASA   " if pasa else "NO PASA"
+                print(
+                    f"  {marca} {tag} | {nombre:<14} | "
+                    f"Sharpe={m['sharpe']:+.2f} | MDD={m['mdd']:.1f}% | "
+                    f"CAGR={m['cagr']:.1f}%"
+                )
 
         except Exception as e:
             if verbose:
@@ -241,27 +168,17 @@ def filtrar_por_backtest_smart(
     if not resultados:
         return pd.DataFrame(), pd.DataFrame()
 
-    todos_df   = pd.DataFrame(resultados)
-    pasaron_df = (
-        todos_df[todos_df["pasa_smart"]]
-        .drop(columns=["pasa_smart"])
-        .reset_index(drop=True)
-    )
+    todos_df = pd.DataFrame(resultados)
+    pasaron_df = todos_df[todos_df["pasa_smart"]].drop(columns=["pasa_smart"]).reset_index(drop=True)
     return pasaron_df, todos_df
 
 
-# ── Tests estadísticos en tiempo real ────────────────────────────────────────
-
 def test_adf_spread(spread: pd.Series) -> dict:
-    """
-    Test ADF sobre el spread reciente.
-    p-value < 0.05 → estacionario → spread válido para operar.
-    """
     try:
         resultado = adfuller(spread.dropna(), autolag="AIC")
         return {
-            "adf_stat":     round(float(resultado[0]), 4),
-            "p_value_adf":  round(float(resultado[1]), 4),
+            "adf_stat": round(float(resultado[0]), 4),
+            "p_value_adf": round(float(resultado[1]), 4),
             "estacionario": resultado[1] < 0.05,
         }
     except Exception:
@@ -269,10 +186,9 @@ def test_adf_spread(spread: pd.Series) -> dict:
 
 
 def regimen_volatilidad(spread: pd.Series, ventana_vol: int = 20) -> str:
-    """Clasifica el régimen de volatilidad del spread: BAJA / NORMAL / ALTA."""
     vol_rolling = spread.rolling(ventana_vol).std()
-    vol_actual  = vol_rolling.iloc[-1]
-    p25, p75    = vol_rolling.quantile(0.25), vol_rolling.quantile(0.75)
+    vol_actual = vol_rolling.iloc[-1]
+    p25, p75 = vol_rolling.quantile(0.25), vol_rolling.quantile(0.75)
     if vol_actual <= p25:
         return "BAJA"
     elif vol_actual >= p75:
@@ -280,20 +196,12 @@ def regimen_volatilidad(spread: pd.Series, ventana_vol: int = 20) -> str:
     return "NORMAL"
 
 
-# ── Verificación diaria de cointegración activa ───────────────────────────────
-
 def verificar_cointegración_activa(
     df_close: pd.DataFrame,
     t1: str,
     t2: str,
     ventana: int = VENTANA_COINT_ACTIVA,
 ) -> dict:
-    """
-    Verifica que el par sigue cointegrado en las últimas `ventana` barras.
-    Usa EG (rápido) sobre los datos más recientes disponibles.
-
-    Una ruptura invalida la señal: el spread ya no revierte a la media.
-    """
     if t1 not in df_close.columns or t2 not in df_close.columns:
         return {"cointegrado": False, "alerta": "Tickers no disponibles en los datos"}
 
@@ -302,7 +210,6 @@ def verificar_cointegración_activa(
     idx = s1.index.intersection(s2.index)
 
     ventana_barras = int(ventana * _bpd(df_close.index))
-    # Tolerancia del 10% para cubrir festivos y fuentes con menos barras que el horario de Alpaca
     min_barras = max(30, int(ventana_barras * 0.90))
     if len(idx) < min_barras:
         return {"cointegrado": False, "alerta": "Datos insuficientes para verificar"}
@@ -313,58 +220,15 @@ def verificar_cointegración_activa(
 
     try:
         _, pvalue, _ = coint(s1_rec, s2_rec)
-        cointegrado  = pvalue < UMBRAL_EG
+        cointegrado = pvalue < UMBRAL_EG
         return {
-            "cointegrado":   cointegrado,
-            "p_value_eg":    round(pvalue, 4),
-            "alerta":        "" if cointegrado else "RUPTURA DE COINTEGRACIÓN — NO OPERAR",
+            "cointegrado": cointegrado,
+            "p_value_eg": round(pvalue, 4),
+            "alerta": "" if cointegrado else "RUPTURA DE COINTEGRACIÓN - NO OPERAR",
         }
     except Exception:
         return {"cointegrado": False, "alerta": "Error en el test EG"}
 
-
-def verificar_pares_activos(
-    df_close: pd.DataFrame,
-    verbose: bool = True,
-) -> dict[str, dict]:
-    """
-    Comprueba la cointegración de todos los pares con posición abierta.
-    Se ejecuta cada día antes de generar señales.
-
-    Lee el estado de posiciones desde estado_posiciones.json y para cada par
-    activo verifica si sigue cointegrado con los datos horarios recientes.
-
-    Returns:
-        dict {par: {"cointegrado": bool, "alerta": str, ...}}
-    """
-    estado  = cargar_estado()
-    if not estado:
-        if verbose:
-            print("[INFO] Sin posiciones abiertas que verificar.")
-        return {}
-
-    if verbose:
-        print(f"\n[VERIFICACIÓN DIARIA] {len(estado)} pares activos...")
-
-    resultados = {}
-    for par, info in estado.items():
-        t1, t2 = par.split("/")
-        check  = verificar_cointegración_activa(df_close, t1, t2)
-        resultados[par] = check
-
-        if verbose:
-            estado_str = "✓ cointegrado" if check["cointegrado"] else f"✗ {check['alerta']}"
-            print(f"  {par:16} | {estado_str}")
-
-    rupturas = [p for p, r in resultados.items() if not r["cointegrado"]]
-    if rupturas and verbose:
-        print(f"\n  [ALERTA] {len(rupturas)} par(es) con cointegración rota: {rupturas}")
-        print(f"  Posiciones correspondientes deben cerrarse.")
-
-    return resultados
-
-
-# ── Evaluación de un par — señal del día ──────────────────────────────────────
 
 def evaluar_par(
     df_close: pd.DataFrame,
@@ -374,78 +238,72 @@ def evaluar_par(
     salida_z: float = 0.5,
     stop_z: float = 3.5,
 ) -> dict:
-    """
-    Evalúa el estado actual de un par cointegrado y genera la señal del día.
-    Primero verifica cointegración activa; si está rota devuelve SUSPENDIDO.
-    """
     if t1 not in df_close.columns or t2 not in df_close.columns:
         return {"par": f"{t1}/{t2}", "señal": "ERROR", "motivo": "Datos insuficientes"}
 
-    # Verificar cointegración antes de generar señal
     coint_ok = verificar_cointegración_activa(df_close, t1, t2)
     if not coint_ok["cointegrado"]:
         return {
-            "par":          f"{t1}/{t2}",
-            "ticker1":      t1,
-            "ticker2":      t2,
-            "fecha":        str(df_close.index[-1]),
-            "señal":        "SUSPENDIDO",
+            "par": f"{t1}/{t2}",
+            "ticker1": t1,
+            "ticker2": t2,
+            "fecha": str(df_close.index[-1]),
+            "señal": "SUSPENDIDO",
             "coint_activa": False,
-            "alerta":       coint_ok["alerta"],
+            "alerta": coint_ok["alerta"],
         }
 
     spread, beta = calcular_spread_kalman(df_close, t1, t2)
 
-    min_obs    = max(30, int(MIN_OBS_HORARIO / HORAS_DIA * _bpd(df_close.index)))
+    min_obs = max(30, int(MIN_OBS_SEÑAL * _bpd(df_close.index)))
     ventana_ou = min(min_obs, len(spread))
-    ou         = parametros_ou(spread.tail(ventana_ou))
-    hl         = ou["half_life"]
-    window     = max(5, int(np.ceil(hl)))
+    ou = parametros_ou(spread.tail(ventana_ou))
+    hl = ou["half_life"]
+    window = max(5, int(np.ceil(hl)))
 
-    zscore  = calcular_zscore(spread, window=window)
+    zscore = calcular_zscore(spread, window=window)
     señales = generar_señales(zscore, entrada_z, salida_z, stop_z)
 
-    señal_hoy   = señales.iloc[-1]
-    z_actual    = float(zscore.iloc[-1]) if not np.isnan(zscore.iloc[-1]) else 0.0
+    señal_hoy = señales.iloc[-1]
+    z_actual = float(zscore.iloc[-1]) if not np.isnan(zscore.iloc[-1]) else 0.0
     beta_actual = float(beta.iloc[-1])
 
-    adf     = test_adf_spread(spread.tail(ventana_ou))
+    adf = test_adf_spread(spread.tail(ventana_ou))
     regimen = regimen_volatilidad(spread)
     madurez = diagnostico_madurez_simple(df_close[t1], df_close[t2])
 
     mapa_señal = {
         Señal.COMPRAR_SPREAD: "LONG_SPREAD",
-        Señal.VENDER_SPREAD:  "SHORT_SPREAD",
-        Señal.CERRAR:         "CERRAR",
-        Señal.NINGUNA:        "HOLD",
+        Señal.VENDER_SPREAD: "SHORT_SPREAD",
+        Señal.CERRAR: "CERRAR",
+        Señal.NINGUNA: "HOLD",
     }
 
     return {
-        "par":                f"{t1}/{t2}",
-        "ticker1":            t1,
-        "ticker2":            t2,
-        "fecha":              str(df_close.index[-1]),
-        "señal":              mapa_señal.get(señal_hoy, "HOLD"),
-        "z_score":            round(z_actual, 4),
-        "beta_kalman":        round(beta_actual, 4),
-        "half_life_bars":     round(hl, 1),
-        "window_zscore":      window,
-        "regimen_vol":        regimen,
-        "adf_p_value":        adf["p_value_adf"],
-        "spread_estac":       adf["estacionario"],
-        "coint_activa":       True,
-        "p_value_eg":         coint_ok["p_value_eg"],
-        "alerta":             "",
-        "precio_t1":          round(float(df_close[t1].iloc[-1]), 2),
-        "precio_t2":          round(float(df_close[t2].iloc[-1]), 2),
-        "spread_actual":      round(float(spread.iloc[-1]), 6),
-        "madurez_estado":     madurez["estado"],
+        "par": f"{t1}/{t2}",
+        "ticker1": t1,
+        "ticker2": t2,
+        "fecha": str(df_close.index[-1]),
+        "señal": mapa_señal.get(señal_hoy, "HOLD"),
+        "z_score": round(z_actual, 4),
+        "beta_kalman": round(beta_actual, 4),
+        "half_life_bars": round(hl, 1),
+        "window_zscore": window,
+        "regimen_vol": regimen,
+        "adf_p_value": adf["p_value_adf"],
+        "spread_estac": adf["estacionario"],
+        "coint_activa": True,
+        "p_value_eg": coint_ok["p_value_eg"],
+        "alerta": "",
+        "precio_t1": round(float(df_close[t1].iloc[-1]), 2),
+        "precio_t2": round(float(df_close[t2].iloc[-1]), 2),
+        "spread_actual": round(float(spread.iloc[-1]), 6),
+        "madurez_estado": madurez["estado"],
         "madurez_descripcion": madurez["descripcion"],
-        "madurez_tendencia":  madurez["tendencia"],
+        "madurez_tendencia": madurez["tendencia"],
+        "ejecucion_mas_temprana": "siguiente barra diaria",
     }
 
-
-# ── Pipeline diario — señales para pares activos ──────────────────────────────
 
 def ejecutar_pipeline_diario(
     top_n: int = 20,
@@ -453,48 +311,32 @@ def ejecutar_pipeline_diario(
     guardar: bool = True,
     verbose: bool = True,
 ) -> pd.DataFrame:
-    """
-    Pipeline diario completo:
-      1. Carga los pares del último scan semanal (o usa pares_lista si se pasa)
-      2. Descarga datos horarios recientes (365 días)
-      3. Verifica cointegración de pares con posición abierta
-      4. Genera señales para todos los pares válidos
-      5. Exporta señales a CSV
-
-    Diseñado para ejecutarse en la apertura del mercado (9:30 EST).
-    """
     if verbose:
         print(f"\n[PIPELINE DIARIO] {datetime.now().strftime('%Y-%m-%d %H:%M')}")
 
     if pares_lista is not None:
         pares_df = pd.DataFrame(pares_lista)
     else:
-        # Avisar si el scan está desactualizado (pero no bloqueamos)
         dias = dias_desde_ultimo_scan()
         if dias is None:
             print("[WARN] No hay pares detectados. Ejecuta primero el scan semanal.")
             return pd.DataFrame()
         if dias > DIAS_ENTRE_SCANS and verbose:
-            print(f"[WARN] El scan tiene {dias} días de antigüedad. "
-                  f"Considera ejecutar ejecutar_scan_semanal().")
+            print(f"[WARN] El scan tiene {dias} días de antigüedad. Considera ejecutar ejecutar_scan_semanal().")
         pares_df = cargar_pares().head(top_n)
 
-    tickers  = list(set(pares_df["ticker1"].tolist() + pares_df["ticker2"].tolist()))
+    tickers = list(set(pares_df["ticker1"].tolist() + pares_df["ticker2"].tolist()))
 
     if verbose:
-        print(f"  Descargando datos horarios para {len(tickers)} tickers...")
+        print(f"  Descargando datos diarios para {len(tickers)} tickers...")
 
-    ohlcv    = descargar_ohlcv_horario(tickers, dias_atras=365)
+    ohlcv = descargar_ohlcv_horario(tickers, dias_atras=365)
     df_close = ohlcv.get("close", pd.DataFrame())
 
     if df_close.empty:
-        print("[ERROR] Sin datos horarios.")
+        print("[ERROR] Sin datos diarios.")
         return pd.DataFrame()
 
-    # Paso 1: verificar cointegración de posiciones abiertas
-    verificar_pares_activos(df_close, verbose=verbose)
-
-    # Paso 2: generar señales
     if verbose:
         print(f"\n  Generando señales para {len(pares_df)} pares...")
 
@@ -505,12 +347,19 @@ def ejecutar_pipeline_diario(
             resultado = evaluar_par(df_close, t1, t2)
             señales.append(resultado)
             if verbose:
-                icono = {"LONG_SPREAD": "▲", "SHORT_SPREAD": "▼", "CERRAR": "✕",
-                         "HOLD": "—", "SUSPENDIDO": "⚠"}.get(resultado["señal"], "?")
+                icono = {
+                    "LONG_SPREAD": "OK",
+                    "SHORT_SPREAD": "FAIL",
+                    "CERRAR": "FAIL",
+                    "HOLD": "-",
+                    "SUSPENDIDO": "WARNING",
+                }.get(resultado["señal"], "?")
                 madurez_tag = f"[{resultado.get('madurez_estado', '?')} {resultado.get('madurez_tendencia', '')}]"
-                print(f"  {icono} {t1}/{t2:8} | Z={resultado.get('z_score', 0):+.2f} | "
-                      f"{resultado['señal']:12} | "
-                      f"{'✓' if resultado.get('coint_activa') else '✗ RUPTURA'} | {madurez_tag}")
+                print(
+                    f"  {icono} {t1}/{t2:8} | Z={resultado.get('z_score', 0):+.2f} | "
+                    f"{resultado['señal']:12} | "
+                    f"{'OK' if resultado.get('coint_activa') else 'FAIL RUPTURA'} | {madurez_tag}"
+                )
         except Exception as e:
             if verbose:
                 print(f"  [ERR] {t1}/{t2}: {e}")
@@ -525,141 +374,36 @@ def ejecutar_pipeline_diario(
     return df_señales
 
 
-# ── Gestión de estado de posiciones abiertas ──────────────────────────────────
-
-def cargar_estado() -> dict:
-    """Carga el estado de posiciones abiertas desde JSON."""
-    if os.path.exists(ESTADO_PATH):
-        with open(ESTADO_PATH) as f:
-            return json.load(f)
-    return {}
-
-
-def guardar_estado(estado: dict) -> None:
-    """Persiste el estado de posiciones abiertas."""
-    with open(ESTADO_PATH, "w") as f:
-        json.dump(estado, f, indent=2, default=str)
-
-
-def actualizar_estado(df_señales: pd.DataFrame) -> dict:
-    """
-    Actualiza el estado de posiciones abiertas basándose en las señales del día.
-    Registra fecha de apertura, dirección y z-score de entrada.
-    """
-    estado = cargar_estado()
-    hoy    = str(datetime.today().date())
-
-    for _, fila in df_señales.iterrows():
-        par   = fila["par"]
-        señal = fila["señal"]
-
-        if señal in ("LONG_SPREAD", "SHORT_SPREAD"):
-            estado[par] = {
-                "direccion":     señal,
-                "fecha_entrada": hoy,
-                "z_entrada":     fila.get("z_score", 0),
-                "beta_entrada":  fila.get("beta_kalman", 0),
-            }
-        elif señal in ("CERRAR", "SUSPENDIDO") and par in estado:
-            del estado[par]
-
-    guardar_estado(estado)
-    return estado
-
-
-# ── Resumen para revisión humana ──────────────────────────────────────────────
-
 def imprimir_resumen_diario(df_señales: pd.DataFrame) -> None:
-    """Imprime un resumen estructurado para revisión humana."""
     if df_señales.empty:
         print("[INFO] Sin señales activas hoy.")
         return
 
-    activas     = df_señales[df_señales["señal"].isin(["LONG_SPREAD", "SHORT_SPREAD"])]
-    cierres     = df_señales[df_señales["señal"] == "CERRAR"]
+    activas = df_señales[df_señales["señal"].isin(["LONG_SPREAD", "SHORT_SPREAD"])]
+    cierres = df_señales[df_señales["señal"] == "CERRAR"]
     suspendidas = df_señales[df_señales["señal"] == "SUSPENDIDO"]
 
-    print(f"\n{'='*60}")
-    print(f"  REPORTE DIARIO — {datetime.today().strftime('%Y-%m-%d %H:%M')}")
-    print(f"{'='*60}")
+    print(f"\n{'=' * 60}")
+    print(f"  REPORTE DIARIO - {datetime.today().strftime('%Y-%m-%d %H:%M')}")
+    print(f"{'=' * 60}")
     print(f"  Nuevas entradas  : {len(activas)}")
     print(f"  Cierres          : {len(cierres)}")
     print(f"  Suspendidas      : {len(suspendidas)}")
     print(f"  Total pares eval : {len(df_señales)}")
 
     if not activas.empty:
-        print(f"\n  ENTRADAS NUEVAS:")
+        print("\n  ENTRADAS NUEVAS:")
         for _, r in activas.iterrows():
-            print(f"    {r['señal']:12} | {r['par']:12} | Z={r['z_score']:+.2f} | "
-                  f"HL={r['half_life_bars']:.0f}b | Vol={r['regimen_vol']}")
+            print(
+                f"    {r['señal']:12} | {r['par']:12} | Z={r['z_score']:+.2f} | "
+                f"HL={r['half_life_bars']:.0f}b | Vol={r['regimen_vol']}"
+            )
             if "madurez_estado" in r and r["madurez_estado"] != "DESCONOCIDO":
                 print(f"    {'':12}   Cointegración: {r['madurez_estado']} {r.get('madurez_tendencia', '')}")
                 print(f"    {'':12}   {r['madurez_descripcion']}")
 
     if not suspendidas.empty:
-        print(f"\n  ALERTAS:")
+        print("\n  ALERTAS:")
         for _, r in suspendidas.iterrows():
-            print(f"    ⚠ {r['par']} — {r['alerta']}")
-    print(f"{'='*60}\n")
-
-    # Notificación proactiva a Telegram si hay señales accionables
-    _push_resumen_telegram(df_señales, activas, cierres, suspendidas)
-
-
-def _push_resumen_telegram(
-    df_señales: pd.DataFrame,
-    activas: pd.DataFrame,
-    cierres: pd.DataFrame,
-    suspendidas: pd.DataFrame,
-) -> None:
-    """Construye y envía el resumen diario a Telegram si está configurado."""
-    if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
-        return
-    if activas.empty and cierres.empty and suspendidas.empty:
-        return
-
-    lineas = [
-        f"📈 <b>Reporte Diario — {datetime.today().strftime('%Y-%m-%d %H:%M')}</b>\n",
-        f"Evaluados: {len(df_señales)} | "
-        f"Entradas: {len(activas)} | "
-        f"Cierres: {len(cierres)} | "
-        f"Alertas: {len(suspendidas)}",
-    ]
-
-    if not activas.empty:
-        lineas.append("\n<b>🔔 Nuevas entradas:</b>")
-        for _, r in activas.iterrows():
-            icono = "▲" if r["señal"] == "LONG_SPREAD" else "▼"
-            madurez = r.get("madurez_estado", "")
-            lineas.append(
-                f"  {icono} <code>{r['par']}</code> | Z={r['z_score']:+.2f} | "
-                f"HL={r.get('half_life_bars', 0):.0f}b | {madurez}"
-            )
-
-    if not cierres.empty:
-        lineas.append("\n<b>✕ Cierres:</b>")
-        for _, r in cierres.iterrows():
-            lineas.append(f"  <code>{r['par']}</code> | Z={r['z_score']:+.2f}")
-
-    if not suspendidas.empty:
-        lineas.append("\n<b>⚠️ Alertas (cointegración rota):</b>")
-        for _, r in suspendidas.iterrows():
-            lineas.append(f"  <code>{r['par']}</code> — {r.get('alerta', '?')}")
-
-    notificar_telegram("\n".join(lineas), html=True)
-
-    # ── Análisis IA proactivo ─────────────────────────────────
-    try:
-        from config import GEMINI_ACTIVO
-        if GEMINI_ACTIVO and (not activas.empty or not cierres.empty):
-            fecha_hoy = datetime.today().strftime("%Y-%m-%d")
-            narrativa = analizar_señales(df_señales, fecha_hoy)
-            if narrativa:
-                ia_push = (
-                    "<b>🤖 Contexto del analista IA</b>\n\n"
-                    f"{narrativa}\n\n"
-                    f"<i>Gemini 2.0 Flash · {fecha_hoy}</i>"
-                )
-                notificar_telegram(ia_push, html=True)
-    except Exception as e:
-        print(f"[GeminiAI] Push automático falló: {e}")
+            print(f"    WARNING {r['par']} - {r['alerta']}")
+    print(f"{'=' * 60}\n")

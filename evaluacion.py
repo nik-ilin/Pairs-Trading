@@ -1,38 +1,20 @@
-"""
-evaluacion.py — Gráficos y panel de presentación del modelo.
-
-Genera visualizaciones de alta calidad para presentación del proyecto.
-Todos los gráficos se guardan en /graficos/ y también se muestran en pantalla.
-
-Gráficos disponibles:
-  1.  Curva de capital con drawdown superpuesto
-  2.  Spread y z-score con marcas de entrada/salida
-  3.  Rolling Sharpe Ratio a lo largo del tiempo
-  4.  Histograma de retornos con distribución normal superpuesta
-  5.  Heatmap de retornos mensuales
-  6.  Simulación Monte Carlo (abanico de trayectorias)
-  7.  Distribución del capital final (Monte Carlo)
-  8.  Rolling cointegración (Johansen) del par ganador
-  9.  Precio relativo de los dos activos del par
-  10. Panel resumen de métricas (tabla visual)
-  11. Walk-Forward: Sharpe por ventana temporal
-  12. Distribución de duración de trades
-"""
+"""Local Matplotlib charts for backtest diagnostics."""
 
 import os
 import warnings
 
+import matplotlib.pyplot as plt
+import matplotlib.ticker as mticker
 import numpy as np
 import pandas as pd
-import matplotlib.pyplot as plt
-import matplotlib.gridspec as gridspec
-import matplotlib.ticker as mticker
 from matplotlib.colors import TwoSlopeNorm
 
 from metricas import (
-    curva_drawdown, sharpe_ratio, cagr, max_drawdown,
-    sortino_ratio, calmar_ratio, var_historico, cvar,
-    win_rate, profit_factor, DIAS_ANIO,
+    DIAS_ANIO,
+    curva_drawdown,
+    cvar,
+    sharpe_ratio,
+    var_historico,
 )
 
 warnings.filterwarnings("ignore")
@@ -40,26 +22,27 @@ warnings.filterwarnings("ignore")
 GRAFICOS_DIR = os.path.join(os.path.dirname(__file__), "graficos")
 os.makedirs(GRAFICOS_DIR, exist_ok=True)
 
-# ── Estilo global ─────────────────────────────────────────────────────────────
-plt.rcParams.update({
-    "figure.facecolor": "#0d1117",
-    "axes.facecolor":   "#161b22",
-    "axes.edgecolor":   "#30363d",
-    "axes.labelcolor":  "#c9d1d9",
-    "xtick.color":      "#8b949e",
-    "ytick.color":      "#8b949e",
-    "text.color":       "#c9d1d9",
-    "grid.color":       "#21262d",
-    "grid.linewidth":   0.8,
-    "font.family":      "monospace",
-    "figure.dpi":       120,
-})
+plt.rcParams.update(
+    {
+        "figure.facecolor": "#0d1117",
+        "axes.facecolor": "#161b22",
+        "axes.edgecolor": "#30363d",
+        "axes.labelcolor": "#c9d1d9",
+        "xtick.color": "#8b949e",
+        "ytick.color": "#8b949e",
+        "text.color": "#c9d1d9",
+        "grid.color": "#21262d",
+        "grid.linewidth": 0.8,
+        "font.family": "monospace",
+        "figure.dpi": 120,
+    }
+)
 
-COLOR_VERDE  = "#3fb950"
-COLOR_ROJO   = "#f85149"
-COLOR_AZUL   = "#58a6ff"
+COLOR_VERDE = "#3fb950"
+COLOR_ROJO = "#f85149"
+COLOR_AZUL = "#58a6ff"
 COLOR_AMARILLO = "#d29922"
-COLOR_GRIS   = "#8b949e"
+COLOR_GRIS = "#8b949e"
 
 
 def _guardar(nombre: str) -> None:
@@ -68,8 +51,6 @@ def _guardar(nombre: str) -> None:
     print(f"[OK] Gráfico guardado: {ruta}")
 
 
-# ── 1. Curva de capital + drawdown ────────────────────────────────────────────
-
 def grafico_curva_capital(
     retornos: pd.Series,
     capital_inicial: float = 100_000.0,
@@ -77,30 +58,35 @@ def grafico_curva_capital(
     guardar: bool = True,
 ) -> None:
     curva = (1 + retornos).cumprod() * capital_inicial
-    dd    = curva_drawdown(retornos)
+    dd = curva_drawdown(retornos)
 
-    fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(14, 8),
-                                    gridspec_kw={"height_ratios": [3, 1]},
-                                    sharex=True)
-    fig.suptitle(f"Curva de Capital — {nombre_par}", fontsize=14, color="#e6edf3")
+    fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(14, 8), gridspec_kw={"height_ratios": [3, 1]}, sharex=True)
+    fig.suptitle(f"Curva de Capital - {nombre_par}", fontsize=14, color="#e6edf3")
 
-    # Capital
     ax1.plot(curva.index, curva.values, color=COLOR_AZUL, linewidth=1.5, label="Capital")
-    ax1.fill_between(curva.index, capital_inicial, curva.values,
-                     where=(curva.values >= capital_inicial),
-                     alpha=0.15, color=COLOR_VERDE)
-    ax1.fill_between(curva.index, capital_inicial, curva.values,
-                     where=(curva.values < capital_inicial),
-                     alpha=0.15, color=COLOR_ROJO)
+    ax1.fill_between(
+        curva.index,
+        capital_inicial,
+        curva.values,
+        where=(curva.values >= capital_inicial),
+        alpha=0.15,
+        color=COLOR_VERDE,
+    )
+    ax1.fill_between(
+        curva.index,
+        capital_inicial,
+        curva.values,
+        where=(curva.values < capital_inicial),
+        alpha=0.15,
+        color=COLOR_ROJO,
+    )
     ax1.axhline(capital_inicial, color=COLOR_GRIS, linestyle="--", linewidth=0.8, alpha=0.6)
     ax1.yaxis.set_major_formatter(mticker.FuncFormatter(lambda x, _: f"${x:,.0f}"))
     ax1.set_ylabel("Capital (USD)")
     ax1.legend(fontsize=9)
     ax1.grid(True, alpha=0.4)
 
-    # Drawdown
-    ax2.fill_between(dd.index, dd.values * 100, 0,
-                     where=(dd.values < 0), alpha=0.7, color=COLOR_ROJO)
+    ax2.fill_between(dd.index, dd.values * 100, 0, where=(dd.values < 0), alpha=0.7, color=COLOR_ROJO)
     ax2.plot(dd.index, dd.values * 100, color=COLOR_ROJO, linewidth=0.8)
     ax2.axhline(-15, color=COLOR_AMARILLO, linestyle="--", linewidth=0.8, alpha=0.8, label="Límite MDD 15%")
     ax2.set_ylabel("Drawdown (%)")
@@ -114,8 +100,6 @@ def grafico_curva_capital(
     plt.show()
 
 
-# ── 2. Spread y z-score con señales ──────────────────────────────────────────
-
 def grafico_spread_zscore(
     spread: pd.Series,
     zscore: pd.Series,
@@ -127,37 +111,82 @@ def grafico_spread_zscore(
 ) -> None:
     from spread import Señal
 
-    fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(14, 8),
-                                    gridspec_kw={"height_ratios": [1, 2]},
-                                    sharex=True)
-    fig.suptitle(f"Spread y Z-score — {nombre_par}", fontsize=14, color="#e6edf3")
+    fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(14, 8), gridspec_kw={"height_ratios": [1, 2]}, sharex=True)
+    fig.suptitle(f"Spread y Z-score - {nombre_par}", fontsize=14, color="#e6edf3")
 
-    # Spread
     ax1.plot(spread.index, spread.values, color=COLOR_AZUL, linewidth=1.0)
     ax1.set_ylabel("Spread (log)")
     ax1.grid(True, alpha=0.4)
 
-    # Z-score
     ax2.plot(zscore.index, zscore.values, color=COLOR_AZUL, linewidth=1.0, label="Z-score")
     ax2.axhline(0, color=COLOR_GRIS, linewidth=0.8, linestyle="--")
-    ax2.axhline(+entrada_z, color=COLOR_ROJO,  linewidth=1.0, linestyle="--", alpha=0.8, label=f"+{entrada_z}σ entrada")
-    ax2.axhline(-entrada_z, color=COLOR_VERDE, linewidth=1.0, linestyle="--", alpha=0.8, label=f"-{entrada_z}σ entrada")
-    ax2.axhline(+salida_z,  color=COLOR_GRIS,  linewidth=0.6, linestyle=":", alpha=0.5)
-    ax2.axhline(-salida_z,  color=COLOR_GRIS,  linewidth=0.6, linestyle=":", alpha=0.5)
+    ax2.axhline(
+        +entrada_z,
+        color=COLOR_ROJO,
+        linewidth=1.0,
+        linestyle="--",
+        alpha=0.8,
+        label=f"+{entrada_z}σ entrada",
+    )
+    ax2.axhline(
+        -entrada_z,
+        color=COLOR_VERDE,
+        linewidth=1.0,
+        linestyle="--",
+        alpha=0.8,
+        label=f"-{entrada_z}σ entrada",
+    )
+    ax2.axhline(+salida_z, color=COLOR_GRIS, linewidth=0.6, linestyle=":", alpha=0.5)
+    ax2.axhline(-salida_z, color=COLOR_GRIS, linewidth=0.6, linestyle=":", alpha=0.5)
 
-    # Marcas de entrada y salida
-    longs  = señales[señales == Señal.COMPRAR_SPREAD]
+    longs = señales[señales == Señal.COMPRAR_SPREAD]
     shorts = señales[señales == Señal.VENDER_SPREAD]
     cierres = señales[señales == Señal.CERRAR]
 
-    ax2.scatter(longs.index,   zscore.loc[longs.index],   color=COLOR_VERDE,    marker="^", s=60, zorder=5, label="Long spread")
-    ax2.scatter(shorts.index,  zscore.loc[shorts.index],  color=COLOR_ROJO,     marker="v", s=60, zorder=5, label="Short spread")
-    ax2.scatter(cierres.index, zscore.loc[cierres.index], color=COLOR_AMARILLO, marker="x", s=40, zorder=5, label="Cierre")
+    ax2.scatter(
+        longs.index,
+        zscore.loc[longs.index],
+        color=COLOR_VERDE,
+        marker="^",
+        s=60,
+        zorder=5,
+        label="Long spread",
+    )
+    ax2.scatter(
+        shorts.index,
+        zscore.loc[shorts.index],
+        color=COLOR_ROJO,
+        marker="v",
+        s=60,
+        zorder=5,
+        label="Short spread",
+    )
+    ax2.scatter(
+        cierres.index,
+        zscore.loc[cierres.index],
+        color=COLOR_AMARILLO,
+        marker="x",
+        s=40,
+        zorder=5,
+        label="Cierre",
+    )
 
-    ax2.fill_between(zscore.index, entrada_z, zscore.values,
-                     where=(zscore.values > entrada_z), alpha=0.1, color=COLOR_ROJO)
-    ax2.fill_between(zscore.index, -entrada_z, zscore.values,
-                     where=(zscore.values < -entrada_z), alpha=0.1, color=COLOR_VERDE)
+    ax2.fill_between(
+        zscore.index,
+        entrada_z,
+        zscore.values,
+        where=(zscore.values > entrada_z),
+        alpha=0.1,
+        color=COLOR_ROJO,
+    )
+    ax2.fill_between(
+        zscore.index,
+        -entrada_z,
+        zscore.values,
+        where=(zscore.values < -entrada_z),
+        alpha=0.1,
+        color=COLOR_VERDE,
+    )
 
     ax2.set_ylabel("Z-score")
     ax2.legend(fontsize=8, loc="upper right")
@@ -169,28 +198,36 @@ def grafico_spread_zscore(
     plt.show()
 
 
-# ── 3. Rolling Sharpe ─────────────────────────────────────────────────────────
-
 def grafico_rolling_sharpe(
     retornos: pd.Series,
     window: int = DIAS_ANIO,
     nombre_par: str = "Estrategia",
     guardar: bool = True,
 ) -> None:
-    rolling_sharpe = retornos.rolling(window).apply(
-        lambda r: sharpe_ratio(pd.Series(r)), raw=False
-    )
+    rolling_sharpe = retornos.rolling(window).apply(lambda r: sharpe_ratio(pd.Series(r)), raw=False)
 
     fig, ax = plt.subplots(figsize=(14, 5))
-    fig.suptitle(f"Rolling Sharpe Ratio ({window}d) — {nombre_par}", fontsize=14, color="#e6edf3")
+    fig.suptitle(f"Rolling Sharpe Ratio ({window}d) - {nombre_par}", fontsize=14, color="#e6edf3")
 
     ax.plot(rolling_sharpe.index, rolling_sharpe.values, color=COLOR_AZUL, linewidth=1.2)
-    ax.axhline(1.0, color=COLOR_VERDE,    linestyle="--", linewidth=1.0, label="Objetivo Sharpe = 1")
-    ax.axhline(0.0, color=COLOR_GRIS,     linestyle="--", linewidth=0.8, alpha=0.5)
-    ax.fill_between(rolling_sharpe.index, 1.0, rolling_sharpe.values,
-                    where=(rolling_sharpe.values >= 1.0), alpha=0.15, color=COLOR_VERDE)
-    ax.fill_between(rolling_sharpe.index, 0.0, rolling_sharpe.values,
-                    where=(rolling_sharpe.values < 0.0), alpha=0.15, color=COLOR_ROJO)
+    ax.axhline(1.0, color=COLOR_VERDE, linestyle="--", linewidth=1.0, label="Objetivo Sharpe = 1")
+    ax.axhline(0.0, color=COLOR_GRIS, linestyle="--", linewidth=0.8, alpha=0.5)
+    ax.fill_between(
+        rolling_sharpe.index,
+        1.0,
+        rolling_sharpe.values,
+        where=(rolling_sharpe.values >= 1.0),
+        alpha=0.15,
+        color=COLOR_VERDE,
+    )
+    ax.fill_between(
+        rolling_sharpe.index,
+        0.0,
+        rolling_sharpe.values,
+        where=(rolling_sharpe.values < 0.0),
+        alpha=0.15,
+        color=COLOR_ROJO,
+    )
 
     ax.set_ylabel("Sharpe Ratio")
     ax.legend(fontsize=9)
@@ -201,31 +238,27 @@ def grafico_rolling_sharpe(
     plt.show()
 
 
-# ── 4. Histograma de retornos ─────────────────────────────────────────────────
-
 def grafico_distribucion_retornos(
     retornos: pd.Series,
     nombre_par: str = "Estrategia",
     guardar: bool = True,
 ) -> None:
     fig, ax = plt.subplots(figsize=(10, 6))
-    fig.suptitle(f"Distribución de Retornos Diarios — {nombre_par}", fontsize=14, color="#e6edf3")
+    fig.suptitle(f"Distribución de Retornos Diarios - {nombre_par}", fontsize=14, color="#e6edf3")
 
     ret = retornos.dropna()
     ax.hist(ret * 100, bins=80, color=COLOR_AZUL, alpha=0.7, density=True, label="Retornos")
 
-    # Distribución normal superpuesta
     mu, sigma = ret.mean() * 100, ret.std() * 100
     x = np.linspace(ret.min() * 100, ret.max() * 100, 200)
     normal = (1 / (sigma * np.sqrt(2 * np.pi))) * np.exp(-0.5 * ((x - mu) / sigma) ** 2)
     ax.plot(x, normal, color=COLOR_AMARILLO, linewidth=1.5, label="Normal teórica")
 
-    # VaR y CVaR
-    var95  = var_historico(ret) * 100
+    var95 = var_historico(ret) * 100
     cvar95 = cvar(ret) * 100
-    ax.axvline(var95,  color=COLOR_ROJO,     linewidth=1.2, linestyle="--", label=f"VaR 95%: {var95:.2f}%")
-    ax.axvline(cvar95, color=COLOR_ROJO,     linewidth=0.8, linestyle=":",  label=f"CVaR 95%: {cvar95:.2f}%")
-    ax.axvline(0,      color=COLOR_GRIS,     linewidth=0.8, alpha=0.5)
+    ax.axvline(var95, color=COLOR_ROJO, linewidth=1.2, linestyle="--", label=f"VaR 95%: {var95:.2f}%")
+    ax.axvline(cvar95, color=COLOR_ROJO, linewidth=0.8, linestyle=":", label=f"CVaR 95%: {cvar95:.2f}%")
+    ax.axvline(0, color=COLOR_GRIS, linewidth=0.8, alpha=0.5)
 
     ax.set_xlabel("Retorno diario (%)")
     ax.set_ylabel("Densidad")
@@ -237,8 +270,6 @@ def grafico_distribucion_retornos(
     plt.show()
 
 
-# ── 5. Heatmap de retornos mensuales ─────────────────────────────────────────
-
 def grafico_heatmap_mensual(
     retornos: pd.Series,
     nombre_par: str = "Estrategia",
@@ -246,19 +277,34 @@ def grafico_heatmap_mensual(
 ) -> None:
     ret_mensual = retornos.resample("ME").apply(lambda r: (1 + r).prod() - 1) * 100
 
-    pivot = pd.DataFrame({
-        "año": ret_mensual.index.year,
-        "mes": ret_mensual.index.month,
-        "ret": ret_mensual.values,
-    }).pivot(index="año", columns="mes", values="ret")
-    pivot.columns = ["Ene","Feb","Mar","Abr","May","Jun","Jul","Ago","Sep","Oct","Nov","Dic"]
+    pivot = pd.DataFrame(
+        {
+            "año": ret_mensual.index.year,
+            "mes": ret_mensual.index.month,
+            "ret": ret_mensual.values,
+        }
+    ).pivot(index="año", columns="mes", values="ret")
+    pivot.columns = [
+        "Ene",
+        "Feb",
+        "Mar",
+        "Abr",
+        "May",
+        "Jun",
+        "Jul",
+        "Ago",
+        "Sep",
+        "Oct",
+        "Nov",
+        "Dic",
+    ]
 
     fig, ax = plt.subplots(figsize=(16, max(4, len(pivot) * 0.5 + 2)))
-    fig.suptitle(f"Retornos Mensuales (%) — {nombre_par}", fontsize=14, color="#e6edf3")
+    fig.suptitle(f"Retornos Mensuales (%) - {nombre_par}", fontsize=14, color="#e6edf3")
 
     vmax = max(abs(pivot.values[~np.isnan(pivot.values)]).max(), 1)
     norm = TwoSlopeNorm(vmin=-vmax, vcenter=0, vmax=vmax)
-    im   = ax.imshow(pivot.values, cmap="RdYlGn", norm=norm, aspect="auto")
+    im = ax.imshow(pivot.values, cmap="RdYlGn", norm=norm, aspect="auto")
 
     ax.set_xticks(range(12))
     ax.set_xticklabels(pivot.columns, fontsize=9)
@@ -269,8 +315,15 @@ def grafico_heatmap_mensual(
         for j in range(12):
             val = pivot.values[i, j]
             if not np.isnan(val):
-                ax.text(j, i, f"{val:.1f}", ha="center", va="center",
-                        fontsize=7, color="white" if abs(val) > vmax * 0.6 else "black")
+                ax.text(
+                    j,
+                    i,
+                    f"{val:.1f}",
+                    ha="center",
+                    va="center",
+                    fontsize=7,
+                    color="white" if abs(val) > vmax * 0.6 else "black",
+                )
 
     plt.colorbar(im, ax=ax, label="Retorno (%)", shrink=0.6)
     plt.tight_layout()
@@ -278,8 +331,6 @@ def grafico_heatmap_mensual(
         _guardar(f"05_heatmap_mensual_{nombre_par.replace('/', '_')}.png")
     plt.show()
 
-
-# ── 6. Monte Carlo — trayectorias ─────────────────────────────────────────────
 
 def grafico_monte_carlo(
     mc_resultado: dict,
@@ -289,30 +340,31 @@ def grafico_monte_carlo(
     n_trayectorias_mostrar: int = 200,
     guardar: bool = True,
 ) -> None:
-    rng        = np.random.default_rng(99)
-    ret_arr    = retornos_reales.dropna().values
-    horizonte  = mc_resultado.get("n_simulaciones", 1000)
-    n_dias     = DIAS_ANIO  # 1 año hacia adelante
+    rng = np.random.default_rng(99)
+    ret_arr = retornos_reales.dropna().values
+    n_dias = DIAS_ANIO
 
     fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(16, 6))
-    fig.suptitle(f"Simulación Monte Carlo — {nombre_par}", fontsize=14, color="#e6edf3")
+    fig.suptitle(f"Simulación Monte Carlo - {nombre_par}", fontsize=14, color="#e6edf3")
 
-    # Trayectorias
     for _ in range(n_trayectorias_mostrar):
         muestra = rng.choice(ret_arr, size=n_dias, replace=True)
-        curva   = capital_inicial * np.cumprod(1 + muestra)
+        curva = capital_inicial * np.cumprod(1 + muestra)
         ax1.plot(curva, alpha=0.06, color=COLOR_AZUL, linewidth=0.5)
 
-    # Percentiles
     todas = []
     for _ in range(1000):
         m = rng.choice(ret_arr, size=n_dias, replace=True)
         todas.append(capital_inicial * np.cumprod(1 + m))
     todas = np.array(todas)
 
-    for p, col, lbl in [(5, COLOR_ROJO, "P5"), (25, COLOR_AMARILLO, "P25"),
-                         (50, COLOR_AZUL, "P50"), (75, COLOR_AMARILLO, "P75"),
-                         (95, COLOR_VERDE, "P95")]:
+    for p, col, lbl in [
+        (5, COLOR_ROJO, "P5"),
+        (25, COLOR_AMARILLO, "P25"),
+        (50, COLOR_AZUL, "P50"),
+        (75, COLOR_AMARILLO, "P75"),
+        (95, COLOR_VERDE, "P95"),
+    ]:
         ax1.plot(np.percentile(todas, p, axis=0), color=col, linewidth=1.5, label=lbl)
 
     ax1.axhline(capital_inicial, color=COLOR_GRIS, linestyle="--", linewidth=0.8, alpha=0.6)
@@ -323,16 +375,15 @@ def grafico_monte_carlo(
     ax1.legend(fontsize=8)
     ax1.grid(True, alpha=0.4)
 
-    # Distribución del capital final
     finales = mc_resultado["capital_final"].values
     ax2.hist(finales, bins=60, color=COLOR_AZUL, alpha=0.7, density=True)
-    ax2.axvline(capital_inicial, color=COLOR_GRIS,   linewidth=1.0, linestyle="--", label="Capital inicial")
-    ax2.axvline(np.percentile(finales, 5),  color=COLOR_ROJO,   linewidth=1.2, linestyle="--", label="P5")
-    ax2.axvline(np.percentile(finales, 50), color=COLOR_AZUL,   linewidth=1.5, linestyle="-",  label="Mediana")
-    ax2.axvline(np.percentile(finales, 95), color=COLOR_VERDE,  linewidth=1.2, linestyle="--", label="P95")
+    ax2.axvline(capital_inicial, color=COLOR_GRIS, linewidth=1.0, linestyle="--", label="Capital inicial")
+    ax2.axvline(np.percentile(finales, 5), color=COLOR_ROJO, linewidth=1.2, linestyle="--", label="P5")
+    ax2.axvline(np.percentile(finales, 50), color=COLOR_AZUL, linewidth=1.5, linestyle="-", label="Mediana")
+    ax2.axvline(np.percentile(finales, 95), color=COLOR_VERDE, linewidth=1.2, linestyle="--", label="P95")
 
     prob = mc_resultado["prob_ganancia"]
-    ax2.set_title(f"Capital final — P(ganancia)={prob*100:.1f}%", color="#c9d1d9")
+    ax2.set_title(f"Capital final - P(ganancia)={prob * 100:.1f}%", color="#c9d1d9")
     ax2.xaxis.set_major_formatter(mticker.FuncFormatter(lambda x, _: f"${x:,.0f}"))
     ax2.set_ylabel("Densidad")
     ax2.legend(fontsize=8)
@@ -344,8 +395,6 @@ def grafico_monte_carlo(
     plt.show()
 
 
-# ── 7. Rolling cointegración (Johansen) ──────────────────────────────────────
-
 def grafico_rolling_cointegracion(
     rolling_df: pd.DataFrame,
     nombre_par: str = "Par",
@@ -356,17 +405,40 @@ def grafico_rolling_cointegracion(
         return
 
     fig, ax = plt.subplots(figsize=(14, 5))
-    fig.suptitle(f"Cointegración Rolling (Johansen 252d) — {nombre_par}", fontsize=14, color="#e6edf3")
+    fig.suptitle(f"Cointegración Rolling (Johansen 252d) - {nombre_par}", fontsize=14, color="#e6edf3")
 
-    ax.plot(rolling_df.index, rolling_df["traza"], color=COLOR_AZUL, linewidth=1.2, label="Estadístico de Traza")
-    ax.plot(rolling_df.index, rolling_df["critico"], color=COLOR_ROJO, linewidth=1.0,
-            linestyle="--", label="Valor Crítico 95%")
-    ax.fill_between(rolling_df.index, rolling_df["traza"], rolling_df["critico"],
-                    where=(rolling_df["traza"] > rolling_df["critico"]),
-                    alpha=0.25, color=COLOR_VERDE, label="Zona cointegrada")
-    ax.fill_between(rolling_df.index, rolling_df["traza"], rolling_df["critico"],
-                    where=(rolling_df["traza"] <= rolling_df["critico"]),
-                    alpha=0.15, color=COLOR_ROJO)
+    ax.plot(
+        rolling_df.index,
+        rolling_df["traza"],
+        color=COLOR_AZUL,
+        linewidth=1.2,
+        label="Estadístico de Traza",
+    )
+    ax.plot(
+        rolling_df.index,
+        rolling_df["critico"],
+        color=COLOR_ROJO,
+        linewidth=1.0,
+        linestyle="--",
+        label="Valor Crítico 95%",
+    )
+    ax.fill_between(
+        rolling_df.index,
+        rolling_df["traza"],
+        rolling_df["critico"],
+        where=(rolling_df["traza"] > rolling_df["critico"]),
+        alpha=0.25,
+        color=COLOR_VERDE,
+        label="Zona cointegrada",
+    )
+    ax.fill_between(
+        rolling_df.index,
+        rolling_df["traza"],
+        rolling_df["critico"],
+        where=(rolling_df["traza"] <= rolling_df["critico"]),
+        alpha=0.15,
+        color=COLOR_ROJO,
+    )
 
     ax.set_ylabel("Estadístico de Traza")
     ax.legend(fontsize=9)
@@ -377,8 +449,6 @@ def grafico_rolling_cointegracion(
     plt.show()
 
 
-# ── 8. Precio relativo del par ────────────────────────────────────────────────
-
 def grafico_precio_relativo(
     precios: pd.DataFrame,
     t1: str,
@@ -388,21 +458,19 @@ def grafico_precio_relativo(
 ) -> None:
     nombre_par = f"{t1}/{t2}"
     fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(14, 8), sharex=True)
-    fig.suptitle(f"Precios y Ratio de Cobertura — {nombre_par}", fontsize=14, color="#e6edf3")
+    fig.suptitle(f"Precios y Ratio de Cobertura - {nombre_par}", fontsize=14, color="#e6edf3")
 
-    # Precios normalizados
     p1 = precios[t1] / precios[t1].iloc[0] * 100
     p2 = precios[t2] / precios[t2].iloc[0] * 100
-    ax1.plot(p1.index, p1.values, color=COLOR_AZUL,  linewidth=1.2, label=t1)
+    ax1.plot(p1.index, p1.values, color=COLOR_AZUL, linewidth=1.2, label=t1)
     ax1.plot(p2.index, p2.values, color=COLOR_VERDE, linewidth=1.2, label=t2)
     ax1.set_ylabel("Precio normalizado (base 100)")
     ax1.legend(fontsize=9)
     ax1.grid(True, alpha=0.4)
 
-    # Ratio de cobertura dinámico (Kalman)
     ax2.plot(beta.index, beta.values, color=COLOR_AMARILLO, linewidth=1.0, label="Beta Kalman")
     ax2.axhline(beta.mean(), color=COLOR_GRIS, linestyle="--", linewidth=0.8, alpha=0.6, label="Beta media")
-    ax2.set_ylabel("Ratio de cobertura (β)")
+    ax2.set_ylabel("Ratio de cobertura (-)")
     ax2.legend(fontsize=9)
     ax2.grid(True, alpha=0.4)
 
@@ -411,8 +479,6 @@ def grafico_precio_relativo(
         _guardar(f"08_precio_relativo_{nombre_par.replace('/', '_')}.png")
     plt.show()
 
-
-# ── 9. Walk-Forward: Sharpe por ventana ──────────────────────────────────────
 
 def grafico_walk_forward(
     wf_df: pd.DataFrame,
@@ -424,7 +490,7 @@ def grafico_walk_forward(
         return
 
     fig, ax = plt.subplots(figsize=(12, 5))
-    fig.suptitle(f"Walk-Forward Validation — {nombre_par}", fontsize=14, color="#e6edf3")
+    fig.suptitle(f"Walk-Forward Validation - {nombre_par}", fontsize=14, color="#e6edf3")
 
     colores = [COLOR_VERDE if s >= 1.0 else COLOR_ROJO for s in wf_df["sharpe"]]
     ax.bar(range(len(wf_df)), wf_df["sharpe"], color=colores, alpha=0.8, edgecolor="#21262d")
@@ -441,8 +507,6 @@ def grafico_walk_forward(
     plt.show()
 
 
-# ── 10. Duración de trades ────────────────────────────────────────────────────
-
 def grafico_duracion_trades(
     trades: pd.DataFrame,
     nombre_par: str = "Estrategia",
@@ -452,25 +516,28 @@ def grafico_duracion_trades(
         return
 
     fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 5))
-    fig.suptitle(f"Análisis de Trades — {nombre_par}", fontsize=14, color="#e6edf3")
+    fig.suptitle(f"Análisis de Trades - {nombre_par}", fontsize=14, color="#e6edf3")
 
-    # Duración
     ax1.hist(trades["duracion_dias"], bins=30, color=COLOR_AZUL, alpha=0.8, edgecolor="#21262d")
-    ax1.axvline(trades["duracion_dias"].mean(), color=COLOR_AMARILLO,
-                linewidth=1.2, linestyle="--", label=f"Media: {trades['duracion_dias'].mean():.0f}d")
+    ax1.axvline(
+        trades["duracion_dias"].mean(),
+        color=COLOR_AMARILLO,
+        linewidth=1.2,
+        linestyle="--",
+        label=f"Media: {trades['duracion_dias'].mean():.0f}d",
+    )
     ax1.set_xlabel("Duración (días)")
     ax1.set_ylabel("N° trades")
     ax1.set_title("Duración de trades")
     ax1.legend(fontsize=8)
     ax1.grid(True, alpha=0.4)
 
-    # PnL por trade
     colores_pnl = [COLOR_VERDE if p > 0 else COLOR_ROJO for p in trades["pnl"]]
     ax2.bar(range(len(trades)), trades["pnl"], color=colores_pnl, alpha=0.8)
     ax2.axhline(0, color=COLOR_GRIS, linewidth=0.8)
     ax2.set_xlabel("Trade #")
     ax2.set_ylabel("PnL (USD)")
-    ax2.set_title(f"PnL por trade | Win Rate: {(trades['pnl']>0).mean()*100:.1f}%")
+    ax2.set_title(f"PnL por trade | Win Rate: {(trades['pnl'] > 0).mean() * 100:.1f}%")
     ax2.grid(True, alpha=0.4, axis="y")
 
     plt.tight_layout()
@@ -479,45 +546,49 @@ def grafico_duracion_trades(
     plt.show()
 
 
-# ── 11. Panel de métricas (tabla visual) ─────────────────────────────────────
-
 def panel_metricas(
     metricas: dict,
     bootstrap_sharpe: dict | None = None,
-    permutaciones: dict | None = None,
     nombre_par: str = "Estrategia",
     guardar: bool = True,
 ) -> None:
     fig, ax = plt.subplots(figsize=(10, 8))
-    fig.suptitle(f"Panel de Métricas — {nombre_par}", fontsize=14, color="#e6edf3")
+    fig.suptitle(f"Panel de Métricas - {nombre_par}", fontsize=14, color="#e6edf3")
     ax.axis("off")
 
     filas = [
         ("RENDIMIENTO", "", ""),
-        ("CAGR",                f"{metricas.get('cagr', 0):.2f}%",     ""),
-        ("Sharpe Ratio",        f"{metricas.get('sharpe', 0):.3f}",     "✓" if metricas.get('sharpe',0) > 1 else "✗"),
-        ("Sortino Ratio",       f"{metricas.get('sortino', 0):.3f}",    ""),
-        ("Calmar Ratio",        f"{metricas.get('calmar', 0):.3f}",     ""),
+        ("CAGR", f"{metricas.get('cagr', 0):.2f}%", ""),
+        (
+            "Sharpe Ratio",
+            f"{metricas.get('sharpe', 0):.3f}",
+            "OK" if metricas.get("sharpe", 0) > 1 else "FAIL",
+        ),
+        ("Sortino Ratio", f"{metricas.get('sortino', 0):.3f}", ""),
+        ("Calmar Ratio", f"{metricas.get('calmar', 0):.3f}", ""),
         ("RIESGO", "", ""),
-        ("Máx. Drawdown",       f"{metricas.get('mdd', 0):.2f}%",       "✓" if metricas.get('mdd',0) > -15 else "✗"),
-        ("VaR 95%",             f"{metricas.get('var_95', 0):.2f}%",    ""),
-        ("CVaR 95%",            f"{metricas.get('cvar_95', 0):.2f}%",   ""),
+        (
+            "Máx. Drawdown",
+            f"{metricas.get('mdd', 0):.2f}%",
+            "OK" if metricas.get("mdd", 0) > -15 else "FAIL",
+        ),
+        ("VaR 95%", f"{metricas.get('var_95', 0):.2f}%", ""),
+        ("CVaR 95%", f"{metricas.get('cvar_95', 0):.2f}%", ""),
         ("TRADES", "", ""),
-        ("N° Trades",           f"{metricas.get('n_trades', 0)}",       ""),
-        ("Win Rate",            f"{metricas.get('win_rate', 0):.1f}%",  ""),
-        ("Profit Factor",       f"{metricas.get('profit_factor', 0):.3f}", ""),
+        ("N° Trades", f"{metricas.get('n_trades', 0)}", ""),
+        ("Win Rate", f"{metricas.get('win_rate', 0):.1f}%", ""),
+        ("Profit Factor", f"{metricas.get('profit_factor', 0):.3f}", ""),
     ]
 
     if bootstrap_sharpe:
         filas += [
             ("VALIDACIÓN ESTADÍSTICA", "", ""),
-            ("IC Sharpe (95%)",
-             f"[{bootstrap_sharpe['ci_inferior']}, {bootstrap_sharpe['ci_superior']}]", ""),
+            (
+                "IC Sharpe (95%)",
+                f"[{bootstrap_sharpe['ci_inferior']}, {bootstrap_sharpe['ci_superior']}]",
+                "",
+            ),
         ]
-    if permutaciones:
-        sig = "SIGNIFICATIVO" if permutaciones["significativo"] else "NO SIGNIFICATIVO"
-        filas.append(("p-value permutaciones", f"{permutaciones['p_value']:.4f}", sig))
-
     colores_fila = []
     for f in filas:
         if f[1] == "":
@@ -536,7 +607,6 @@ def panel_metricas(
     tabla.set_fontsize(10)
     tabla.scale(1.2, 1.8)
 
-    # Colorear encabezados
     for (i, j), celda in tabla.get_celld().items():
         celda.set_edgecolor("#30363d")
         celda.set_text_props(color="#c9d1d9")
@@ -550,36 +620,23 @@ def panel_metricas(
     plt.show()
 
 
-# ── Función de conveniencia: generar todos los gráficos ──────────────────────
-
 def generar_informe_completo(resultado_backtest: dict, nombre_par: str, guardar: bool = True) -> None:
-    """
-    Genera los 4 gráficos esenciales para presentación del par.
-    Acepta el diccionario devuelto por backtesting.backtest_completo().
-
-    Gráficos generados:
-      01_curva_capital       — curva de capital + drawdown
-      02_spread_zscore       — spread y z-score con señales de entrada/salida
-      03_monte_carlo         — simulación Monte Carlo (1 año hacia adelante)
-      05_panel_metricas      — tabla resumen con todas las métricas y semáforos SMART
-
-    El gráfico 04_rolling_cointegracion se genera por separado desde modo_backtest/modo_evaluar.
-    """
-    ret      = resultado_backtest["retornos"]
-    spread   = resultado_backtest["spread"]
-    zscore   = resultado_backtest["zscore"]
-    señales  = resultado_backtest["señales"]
+    ret = resultado_backtest["retornos"]
+    spread = resultado_backtest["spread"]
+    zscore = resultado_backtest["zscore"]
+    señales = resultado_backtest["señales"]
     metricas = resultado_backtest["metricas"]
-    mc       = resultado_backtest.get("monte_carlo", {})
-    bs       = resultado_backtest.get("bootstrap_sharpe", None)
-    perm     = resultado_backtest.get("permutaciones", None)
+    mc = resultado_backtest.get("monte_carlo", {})
+    bs = resultado_backtest.get("bootstrap_sharpe", None)
 
     print(f"\n[INFO] Generando informe para {nombre_par}...")
 
     grafico_curva_capital(ret, nombre_par=nombre_par, guardar=guardar)
     grafico_spread_zscore(spread, zscore, señales, nombre_par=nombre_par, guardar=guardar)
+    chart_count = 3
     if mc:
         grafico_monte_carlo(mc, ret, nombre_par=nombre_par, guardar=guardar)
-    panel_metricas(metricas, bs, perm, nombre_par=nombre_par, guardar=guardar)
+        chart_count += 1
+    panel_metricas(metricas, bs, nombre_par=nombre_par, guardar=guardar)
 
-    print(f"[OK] Informe generado en {GRAFICOS_DIR}/ (4 gráficos + rolling coint. aparte)")
+    print(f"[OK] Informe generado en {GRAFICOS_DIR}/ ({chart_count} gráficos)")

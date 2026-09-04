@@ -1,26 +1,25 @@
-# Entorno virtual
 .venv/
 venv/
 env/
+.env
+.env.*
 
-# Caché de precios (regenerable con python main.py --modo scan)
-cache/
-
-# Gráficos generados (regenerables con --graficos)
-graficos/
-
-# Python
 __pycache__/
 *.py[cod]
-*.pyo
+.pytest_cache/
+.ruff_cache/
+.coverage
+htmlcov/
 
-# Señales y estado de posiciones (datos en tiempo real, no versionables)
+cache/
+graficos/
+pares_cointegrados.csv
 señales_diarias.csv
 estado_posiciones.json
+reports/
+*.log
 
-# Variables de entorno y claves API (NUNCA subir al repositorio)
-.env
-.env.local
-
-# macOS
+build/
+dist/
+*.egg-info/
 .DS_Store
