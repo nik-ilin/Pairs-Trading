@@ -55,8 +55,6 @@ Supported modes are `backtest`, `diario`, `evaluar`, `scan`, and `full`. The pai
 
 The release check uses AAPL/MSFT adjusted daily closes requested from 2020-01-01 through the exclusive end date 2026-09-04. It uses the defaults in `config.py`: 60-bar non-trading calibration, automatic OU z-score window, entry/exit/stop z-scores of 1.5/0.5/3.5, 20-bar lagged volatility, 10% risk fraction, and 1.0x gross-exposure cap. The numerical result is printed by the command rather than presented as a stable benchmark because Yahoo may revise historical data and dependency versions can alter estimates.
 
-No chart is committed in this release. `--graficos` or `--modo evaluar` calls `generar_informe_completo()` and writes three charts, plus Monte Carlo when available, to the ignored `graficos/` directory.
-
 ## Tests and quality checks
 
 ```bash
